@@ -1,15 +1,9 @@
-.,.,,"CHANGELOG,sentry-config.cmake.in"
 include,include,,h
-src,src,,"h,c,CMakeLists.txt"
-src/backends,src/backends,,"h,c,cpp"
+src,src,,"h,c,txt"
+src/backends,src/backends,,"c,cpp"
 src/modulefinder,src/modulefinder,,"h,c"
 src/path,src/path,,c
 src/symbolizer,src/symbolizer,,c
 src/transports,src/transports,,"h,c"
 src/unwinder,src/unwinder,,"c,cpp"
-.vscode,.vscode,skip,
-examples,examples,skip,
-external,external,skip,
-scripts,scripts,skip,
-tests,tests,skip,
 vendor,vendor,,"h,c"
