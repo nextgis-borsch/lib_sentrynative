@@ -182,7 +182,7 @@ include(FindAnyProject)
 
 # ===== sentry library =====
 
-add_library(${LIB_NAME} STATIC "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+add_library(${LIB_NAME} "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
 add_library(sentry::sentry ALIAS ${LIB_NAME})
 add_subdirectory(src)
 
