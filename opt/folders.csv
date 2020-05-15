@@ -7,3 +7,9 @@ src/symbolizer,src/symbolizer,,c
 src/transports,src/transports,,"h,c"
 src/unwinder,src/unwinder,,"c,cpp"
 vendor,vendor,,"h,c"
+src,src,skip,"sentry_unix_pageallocator.h,sentry_unix_spinlock.h,sentry_unix_pageallocator.c"
+src/path,src/path,skip,sentry_path_unix.c
+src/symbolizer,src/symbolizer,skip,sentry_symbolizer_unix.c
+src/modulefinder,src/modulefinder,skip,"sentry_modulefinder_apple.c,sentry_modulefinder_linux.c"
+src/backends,src/backends,skip,"sentry_backend_crashpad.cpp,sentry_backend_breakpad.cpp,sentry_backend_inproc.c"
+src/unwinder,src/unwinder,skip,"sentry_unwinder_libbacktrace.c,sentry_unwinder_libunwindstack.cpp"
