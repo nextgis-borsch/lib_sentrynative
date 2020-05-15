@@ -154,8 +154,6 @@ add_library(${LIB_NAME} "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
 add_library(sentry::sentry ALIAS ${LIB_NAME})
 add_subdirectory(src)
 
-set_target_properties(${LIB_NAME} PROPERTIES PUBLIC_HEADER "include/sentry.h")
-
 if(BUILD_SHARED_LIBS)
 	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
 else()
@@ -251,8 +249,8 @@ endif()
 
 # Create the SENTRYConfig.cmake file
 configure_file(cmake/PackageConfig.cmake.in
-   ${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake @ONLY)
-   
+	${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake @ONLY)
+
 if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
 	install(TARGETS ${TARGETS} 
 		EXPORT ${PACKAGE_UPPER_NAME}Targets
@@ -262,14 +260,18 @@ if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
 		INCLUDES DESTINATION ${INSTALL_INC_DIR}
 		FRAMEWORK DESTINATION ${INSTALL_LIB_DIR}
 	)
+	
+	install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/sentry.h"
+		DESTINATION "${INSTALL_INC_DIR}"
+	)
 
-   # Install the <Package>Config.cmake
-   install(FILES
-     ${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake
-     DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+	# Install the <Package>Config.cmake
+	install(FILES
+		${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake
+		DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
 
-   # Install the export set for use with the install-tree
-   install(EXPORT ${PACKAGE_UPPER_NAME}Targets DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+	# Install the export set for use with the install-tree
+	install(EXPORT ${PACKAGE_UPPER_NAME}Targets DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
 endif()
 
 # Archiving ====================================================================
