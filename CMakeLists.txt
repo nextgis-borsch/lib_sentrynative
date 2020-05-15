@@ -21,7 +21,7 @@
 ################################################################################
 
 cmake_minimum_required(VERSION 2.8.12 FATAL_ERROR)
-project(sentry)
+project(sentrynative)
 
 if(NOT DEFINED PACKAGE_VENDOR)
     set(PACKAGE_VENDOR NextGIS)
@@ -111,41 +111,9 @@ if(SENTRY_TRANSPORT_WINHTTP AND NOT WIN32)
 	message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
 endif()
 
-if(APPLE OR WIN32)
-	set(SENTRY_DEFAULT_BACKEND "crashpad")
-elseif(LINUX)
-	set(SENTRY_DEFAULT_BACKEND "breakpad")
-else()
-	set(SENTRY_DEFAULT_BACKEND "inproc")
-endif()
-
-set(SENTRY_BACKEND ${SENTRY_DEFAULT_BACKEND} CACHE STRING
-  "The sentry backend responsible for reporting crashes, can be either 'none', 'inproc', 'breakpad' or 'crashpad'.")
-
-if(SENTRY_BACKEND STREQUAL "crashpad")
-	set(SENTRY_BACKEND_CRASHPAD TRUE)
-elseif(SENTRY_BACKEND STREQUAL "inproc")
-	set(SENTRY_BACKEND_INPROC TRUE)
-elseif(SENTRY_BACKEND STREQUAL "breakpad")
-	set(SENTRY_BACKEND_BREAKPAD TRUE)
-elseif(SENTRY_BACKEND STREQUAL "none")
-	set(SENTRY_BACKEND_NONE TRUE)
-else()
-	message(FATAL_ERROR "SENTRY_BACKEND must be one of 'crashpad', 'inproc', 'breakpad' or 'none'")
-endif()
-
-if(SENTRY_BACKEND_CRASHPAD AND NOT (APPLE OR WIN32))
-	message(FATAL_ERROR "The Crashpad backend is currently only supported on macOS and Windows")
-endif()
-if(SENTRY_BACKEND_BREAKPAD AND NOT LINUX)
-	message(FATAL_ERROR "The Breakpad backend is currently only supported on Linux")
-endif()
-if(SENTRY_BACKEND_INPROC AND WIN32)
-	message(FATAL_ERROR "The in-process backend is not supported on Windows")
-endif()
+set(SENTRY_BACKEND_NONE TRUE)
 
 message(STATUS "SENTRY_TRANSPORT=${SENTRY_TRANSPORT}")
-message(STATUS "SENTRY_BACKEND=${SENTRY_BACKEND}")
 
 option(WITH_ASAN_OPTION "Build sentry-native with address sanitizer" OFF)
 if(WITH_ASAN_OPTION)
@@ -189,22 +157,22 @@ add_subdirectory(src)
 set_target_properties(${LIB_NAME} PROPERTIES PUBLIC_HEADER "include/sentry.h")
 
 if(BUILD_SHARED_LIBS)
-	target_compile_definitions(sentry PRIVATE SENTRY_BUILD_SHARED)
+	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
 else()
-	target_compile_definitions(sentry PUBLIC SENTRY_BUILD_STATIC)
+	target_compile_definitions(${LIB_NAME} PUBLIC SENTRY_BUILD_STATIC)
 endif()
 
 if(SENTRY_TRANSPORT_CURL)
 	find_anyproject(CURL REQUIRED)
-	target_include_directories(sentry PRIVATE ${CURL_INCLUDE_DIR})
+	target_include_directories(${LIB_NAME} PRIVATE ${CURL_INCLUDE_DIR})
 	# The exported sentry target must not contain any path of the build machine, therefore use generator expressions
 	# FIXME: cmake 3.12 introduced the target CURL::libcurl
 	string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_LIBRARIES "${CURL_LIBRARIES}")
 	string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_COMPILE_DEFINITIONS "${CURL_COMPILE_DEFINITIONS}")
-	target_link_libraries(sentry PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_LIBRARIES}>)
-	target_compile_definitions(sentry PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_COMPILE_DEFINITIONS}>)
+	target_link_libraries(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_LIBRARIES}>)
+	target_compile_definitions(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_COMPILE_DEFINITIONS}>)
 elseif(SENTRY_TRANSPORT_WINHTTP)
-	target_link_libraries(sentry PRIVATE winhttp)
+	target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
 
 set_property(TARGET ${LIB_NAME} PROPERTY C_VISIBILITY_PRESET hidden)
@@ -233,32 +201,32 @@ target_include_directories(${LIB_NAME}
 #respect CMAKE_SYSTEM_VERSION
 if(WIN32)
 	if(${CMAKE_SYSTEM_VERSION} MATCHES "^10")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0A00")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0A00")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.3")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0603")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0603")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.2")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0602")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0602")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.1")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0601")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0601")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.0")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0600")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0600")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.2")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0502")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0502")
 	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.1")
-		target_compile_definitions(sentry PRIVATE "_WIN32_WINNT=0x0501")
+		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0501")
 	endif()
-	target_link_libraries(sentry PRIVATE shlwapi)
+	target_link_libraries(${LIB_NAME} PRIVATE shlwapi)
 endif()
 
 if(LINUX)
-	target_link_libraries(sentry PRIVATE pthread dl)
+	target_link_libraries(${LIB_NAME} PRIVATE pthread dl)
 elseif(ANDROID)
-	target_link_libraries(sentry PRIVATE dl log)
+	target_link_libraries(${LIB_NAME} PRIVATE dl log)
 elseif(MSVC)
-	target_link_libraries(sentry PRIVATE dbghelp)
+	target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
 elseif(MINGW)
-	target_link_libraries(sentry PRIVATE dbghelp)
-	target_compile_options(sentry PRIVATE
+	target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
+	target_compile_options(${LIB_NAME} PRIVATE
 		-Wno-unused-variable
 		-Wno-unused-parameter
 		-Wno-format
@@ -267,17 +235,6 @@ elseif(MINGW)
 	)
 endif()
 
-if(SENTRY_BACKEND_CRASHPAD)
-	find_anyproject(MINICHROMIUM REQUIRED)
-	target_link_libraries(sentry PUBLIC ${MINICHROMIUM_LIBRARIES})
-	
-	find_anyproject(CRASHPAD REQUIRED)
-	target_link_libraries(sentry PUBLIC crashpad::client)
-	add_dependencies(sentry crashpad::handler)
-elseif(SENTRY_BACKEND_INPROC)
-	target_compile_definitions(sentry PRIVATE SENTRY_WITH_INPROC_BACKEND)
-endif()	
-	
 add_custom_target(uninstall COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 
 # Export package ===============================================================

@@ -1,0 +1,77 @@
+sentry_target_sources_cwd(${LIB_NAME}
+	sentry_alloc.c
+	sentry_alloc.h
+	sentry_backend.c
+	sentry_backend.h
+	sentry_boot.h
+	sentry_core.c
+	sentry_core.h
+	sentry_database.c
+	sentry_database.h
+	sentry_envelope.c
+	sentry_envelope.h
+	sentry_json.c
+	sentry_json.h
+	sentry_modulefinder.h
+	sentry_options.c
+	sentry_options.h
+	sentry_path.h
+	sentry_random.c
+	sentry_random.h
+	sentry_ratelimiter.c
+	sentry_ratelimiter.h
+	sentry_scope.c
+	sentry_scope.h
+	sentry_session.c
+	sentry_session.h
+	sentry_slice.c
+	sentry_slice.h
+	sentry_string.c
+	sentry_string.h
+	sentry_symbolizer.h
+	sentry_sync.c
+	sentry_sync.h
+	sentry_transport.c
+	sentry_transport.h
+	sentry_utils.c
+	sentry_utils.h
+	sentry_uuid.c
+	sentry_uuid.h
+	sentry_value.c
+	sentry_value.h
+	path/sentry_path.c
+	transports/sentry_disk_transport.c
+	transports/sentry_disk_transport.h
+	transports/sentry_function_transport.c
+	unwinder/sentry_unwinder.c
+	sentry_windows_dbghelp.c
+	sentry_windows_dbghelp.h
+	path/sentry_path_windows.c
+	symbolizer/sentry_symbolizer_windows.c
+	modulefinder/sentry_modulefinder_windows.c
+	unwinder/sentry_unwinder_dbghelp.c
+)
+
+# transport
+if(SENTRY_TRANSPORT_CURL)
+	sentry_target_sources_cwd(${LIB_NAME}
+		transports/sentry_transport_curl.c
+	)
+elseif(SENTRY_TRANSPORT_WINHTTP)
+	sentry_target_sources_cwd(${LIB_NAME}
+		transports/sentry_transport_winhttp.c
+	)
+elseif(SENTRY_TRANSPORT_NONE)
+	sentry_target_sources_cwd(${LIB_NAME}
+		transports/sentry_transport_none.c
+	)
+endif()
+
+# backends
+if(SENTRY_BACKEND_NONE)
+    sentry_target_sources_cwd(${LIB_NAME}
+        backends/sentry_backend_none.c
+    )
+endif()
+
+target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_WITH_UNWINDER_DBGHELP)
