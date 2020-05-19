@@ -3,8 +3,8 @@
 # Purpose:  CMake build scripts
 # Author:   Dmitry Baryshnikov, polimax@mail.ru
 ################################################################################
-# Copyright (C) 2015-2019, NextGIS <info@nextgis.com>
-# Copyright (C) 2015-2019 Dmitry Baryshnikov
+# Copyright (C) 2015-2020, NextGIS <info@nextgis.com>
+# Copyright (C) 2015-2020 Dmitry Baryshnikov
 #
 # This script is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -29,19 +29,14 @@ function(check_version major minor patch)
 
     string(REGEX MATCH "SENTRY_SDK_VERSION \"[0-9]+.[0-9]+.[0-9]+\""
       PACKAGE_VERSION ${VERSION_H_CONTENTS})		  
-	  
-    string (REGEX MATCH "[0-9]+"
-      MAJOR_VERSION ${PACKAGE_VERSION})	    
-	  
-    string(REGEX MATCH "[.][0-9]+"
-      MINOR_VERSION ${PACKAGE_VERSION})
-	string(REGEX MATCH "[0-9]+"
-      MINOR_VERSION ${MINOR_VERSION})
-	  
-    string(REGEX MATCH "[0-9]+\""
-        PATCH_NUMBER ${PACKAGE_VERSION})
-	string(REGEX MATCH "[0-9]+"
-        PATCH_NUMBER ${PATCH_NUMBER})
+
+    string (REGEX MATCH "[0-9]+" MAJOR_VERSION ${PACKAGE_VERSION})	    
+
+    string(REGEX MATCH "[.][0-9]+" MINOR_VERSION ${PACKAGE_VERSION})
+    string(REGEX MATCH "[0-9]+" MINOR_VERSION ${MINOR_VERSION})
+
+    string(REGEX MATCH "[0-9]+\"" PATCH_NUMBER ${PACKAGE_VERSION})
+    string(REGEX MATCH "[0-9]+" PATCH_NUMBER ${PATCH_NUMBER})
 
     set(${major} ${MAJOR_VERSION} PARENT_SCOPE)
     set(${minor} ${MINOR_VERSION} PARENT_SCOPE)
@@ -50,7 +45,7 @@ function(check_version major minor patch)
     # Store version string in file for installer needs
     file(TIMESTAMP ${VERSION_FILE} VERSION_DATETIME "%Y-%m-%d %H:%M:%S" UTC)
     set(VERSION ${MAJOR_VERSION}.${MINOR_VERSION}.${PATCH_NUMBER})
-	message(STATUS "VERSION: ${VERSION}")
+    message(STATUS "VERSION: ${VERSION}")
     get_cpack_filename(${VERSION} PROJECT_CPACK_FILENAME)
     file(WRITE ${CMAKE_BINARY_DIR}/version.str "${VERSION}\n${VERSION_DATETIME}\n${PROJECT_CPACK_FILENAME}")
 
@@ -167,7 +162,7 @@ function(get_compiler_version ver)
     endif()
 
     # Debug
-    # set(COMPILER Clang-9.0)
+    set(COMPILER Clang-9.0)
 
     set(${ver} ${COMPILER} PARENT_SCOPE)
 endfunction()

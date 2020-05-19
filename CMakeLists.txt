@@ -64,7 +64,7 @@ endif()
 set(PACKAGE_NAME ${PROJECT_NAME})
 string(TOUPPER ${PACKAGE_NAME} PACKAGE_UPPER_NAME)
 
-set(LIB_NAME ${PROJECT_NAME})
+set(LIB_NAME sentry)
 set(TARGETS ${LIB_NAME})
 
 include(util)
@@ -73,42 +73,46 @@ check_version(MAJOR_VER MINOR_VER REL_VER FIX_VER)
 set(VERSION ${MAJOR_VER}.${MINOR_VER}.${REL_VER})
 report_version(${PROJECT_NAME} ${VERSION})
 
+if(OSX_FRAMEWORK)
+	set(FRAMEWORK_VERSION ${MAJOR_VER})
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	set(LINUX TRUE)
+    set(LINUX TRUE)
 endif()
 
 option(SENTRY_PIC "Build sentry (and dependent) libraries as position independent libraries" ON)
 
 # CMAKE_POSITION_INDEPENDENT_CODE must be set BEFORE adding any libraries (including subprojects)
 if(SENTRY_PIC)
-	set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 else()
-	set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+    set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
 endif()
 
 if(WIN32)
-	set(SENTRY_DEFAULT_TRANSPORT "winhttp")
+    set(SENTRY_DEFAULT_TRANSPORT "winhttp")
 elseif(APPLE OR LINUX)
-	set(SENTRY_DEFAULT_TRANSPORT "curl")
+    set(SENTRY_DEFAULT_TRANSPORT "curl")
 else()
-	set(SENTRY_DEFAULT_TRANSPORT "none")
+    set(SENTRY_DEFAULT_TRANSPORT "none")
 endif()
 
 set(SENTRY_TRANSPORT ${SENTRY_DEFAULT_TRANSPORT} CACHE STRING
   "The HTTP transport that sentry uses to submit events to the sentry server, can be either 'none', 'curl' or 'winhttp' on windows.")
 
 if(SENTRY_TRANSPORT STREQUAL "winhttp")
-	set(SENTRY_TRANSPORT_WINHTTP TRUE)
+    set(SENTRY_TRANSPORT_WINHTTP TRUE)
 elseif(SENTRY_TRANSPORT STREQUAL "curl")
-	set(SENTRY_TRANSPORT_CURL TRUE)
+    set(SENTRY_TRANSPORT_CURL TRUE)
 elseif(SENTRY_TRANSPORT STREQUAL "none")
-	set(SENTRY_TRANSPORT_NONE TRUE)
+    set(SENTRY_TRANSPORT_NONE TRUE)
 else()
-	message(FATAL_ERROR "SENTRY_TRANSPORT must be one of 'none', 'curl' or 'winhttp'")
+    message(FATAL_ERROR "SENTRY_TRANSPORT must be one of 'none', 'curl' or 'winhttp'")
 endif()
 
 if(SENTRY_TRANSPORT_WINHTTP AND NOT WIN32)
-	message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
+    message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
 endif()
 
 set(SENTRY_BACKEND_NONE TRUE)
@@ -117,120 +121,143 @@ message(STATUS "SENTRY_TRANSPORT=${SENTRY_TRANSPORT}")
 
 option(WITH_ASAN_OPTION "Build sentry-native with address sanitizer" OFF)
 if(WITH_ASAN_OPTION)
-	add_compile_options(-g -fsanitize=address -fno-omit-frame-pointer)
-	link_libraries(-fsanitize=address)
+    add_compile_options(-g -fsanitize=address -fno-omit-frame-pointer)
+    link_libraries(-fsanitize=address)
 endif()
 
 option(WITH_TSAN_OPTION "Build sentry-native with thread sanitizer" OFF)
 if(WITH_TSAN_OPTION)
-	add_compile_options(-g -fsanitize=thread -fno-omit-frame-pointer)
-	link_libraries(-fsanitize=thread)
+    add_compile_options(-g -fsanitize=thread -fno-omit-frame-pointer)
+    link_libraries(-fsanitize=thread)
 endif()
 
 # use -O3 when doing `RelWithDebInfo` builds
 if(NOT MSVC)
-	foreach(lang ASM C CXX)
-		string(REPLACE "-O2" "-O3" CMAKE_${lang}_FLAGS_RELWITHDEBINFO "${CMAKE_${lang}_FLAGS_RELWITHDEBINFO}")
-	endforeach()
+    foreach(lang ASM C CXX)
+        string(REPLACE "-O2" "-O3" CMAKE_${lang}_FLAGS_RELWITHDEBINFO "${CMAKE_${lang}_FLAGS_RELWITHDEBINFO}")
+    endforeach()
 endif()
 
 # helper function to add sources to existing TARGET prepended with ${CMAKE_CURRENT_SOURCE_DIR}/${SUBDIR}
 function(sentry_target_sources_cwd TARGET)
-	cmake_parse_arguments(STSC "" "SUBDIR" "" ${ARGN})
-	foreach(src ${STSC_UNPARSED_ARGUMENTS})
-		if(IS_ABSOLUTE "${src}")
-			target_sources(${TARGET} PRIVATE ${src})
-		else()
-			target_sources(${TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/${STSC_SUBDIR}/${src}")
-		endif()
-	endforeach()
+    cmake_parse_arguments(STSC "" "SUBDIR" "" ${ARGN})
+    foreach(src ${STSC_UNPARSED_ARGUMENTS})
+        if(IS_ABSOLUTE "${src}")
+            target_sources(${TARGET} PRIVATE ${src})
+        else()
+            target_sources(${TARGET} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/${STSC_SUBDIR}/${src}")
+        endif()
+    endforeach()
 endfunction()
-
-include(FindAnyProject)
 
 # ===== sentry library =====
 
-add_library(${LIB_NAME} "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+
+
+if(BUILD_SHARED_LIBS OR OSX_FRAMEWORK)
+	add_library(${LIB_NAME} SHARED "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+    target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
+else()
+	add_library(${LIB_NAME} STATIC "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+    target_compile_definitions(${LIB_NAME} PUBLIC SENTRY_BUILD_STATIC)
+endif()
 add_library(sentry::sentry ALIAS ${LIB_NAME})
 add_subdirectory(src)
-
-if(BUILD_SHARED_LIBS)
-	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
+if(OSX_FRAMEWORK)
+    set(INST_HEADER
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/sentry.h
+    )
+    set_target_properties(${LIB_NAME} PROPERTIES
+      FRAMEWORK TRUE
+      FRAMEWORK_VERSION ${FRAMEWORK_VERSION}
+      MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${VERSION}
+      MACOSX_FRAMEWORK_BUNDLE_VERSION ${VERSION}
+      MACOSX_FRAMEWORK_IDENTIFIER io.sentry.native
+      XCODE_ATTRIBUTE_INSTALL_PATH "@rpath"
+      PUBLIC_HEADER "${INST_HEADER}"
+	)
 else()
-	target_compile_definitions(${LIB_NAME} PUBLIC SENTRY_BUILD_STATIC)
+    set_target_properties(${LIB_NAME} PROPERTIES VERSION ${VERSION})
+    set_target_properties(${LIB_NAME} PROPERTIES SOVERSION ${SOVERSION})
 endif()
 
+set_target_properties(${LIB_NAME} PROPERTIES CLEAN_DIRECT_OUTPUT 1)
+if(MSVC)
+    set_target_properties(${LIB_NAME} PROPERTIES IMPORT_SUFFIX "_i.lib")
+endif()
+
+include(FindAnyProject)
 if(SENTRY_TRANSPORT_CURL)
-	find_anyproject(CURL REQUIRED)
-	target_include_directories(${LIB_NAME} PRIVATE ${CURL_INCLUDE_DIR})
-	# The exported sentry target must not contain any path of the build machine, therefore use generator expressions
-	# FIXME: cmake 3.12 introduced the target CURL::libcurl
-	string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_LIBRARIES "${CURL_LIBRARIES}")
-	string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_COMPILE_DEFINITIONS "${CURL_COMPILE_DEFINITIONS}")
-	target_link_libraries(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_LIBRARIES}>)
-	target_compile_definitions(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_COMPILE_DEFINITIONS}>)
+    find_anyproject(CURL REQUIRED)
+    target_include_directories(${LIB_NAME} PRIVATE ${CURL_INCLUDE_DIR})
+    # The exported sentry target must not contain any path of the build machine, therefore use generator expressions
+    # FIXME: cmake 3.12 introduced the target CURL::libcurl
+    string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_LIBRARIES "${CURL_LIBRARIES}")
+    string(REPLACE ";" "$<SEMICOLON>" GENEX_CURL_COMPILE_DEFINITIONS "${CURL_COMPILE_DEFINITIONS}")
+    target_link_libraries(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_LIBRARIES}>)
+    target_compile_definitions(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:${GENEX_CURL_COMPILE_DEFINITIONS}>)
 elseif(SENTRY_TRANSPORT_WINHTTP)
-	target_link_libraries(${LIB_NAME} PRIVATE winhttp)
+    target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
 
 set_property(TARGET ${LIB_NAME} PROPERTY C_VISIBILITY_PRESET hidden)
 if(MSVC)
-	if(CMAKE_SIZEOF_VOID_P EQUAL 4)
-		set(CMAKE_ASM_MASM_FLAGS "${CMAKE_ASM_MASM_FLAGS} /safeseh")
-	endif()
+    if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+        set(CMAKE_ASM_MASM_FLAGS "${CMAKE_ASM_MASM_FLAGS} /safeseh")
+    endif()
 else()
-	target_compile_options(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:-Wall -Wextra -Wpedantic>)
-	# ignore all warnings for mpack
-	set_source_files_properties(
-		"${PROJECT_SOURCE_DIR}/vendor/mpack.c"
-		PROPERTIES
-		COMPILE_FLAGS
-		"-w"
-	)
+    target_compile_options(${LIB_NAME} PRIVATE $<BUILD_INTERFACE:-Wall -Wextra -Wpedantic>)
+    # ignore all warnings for mpack
+    set_source_files_properties(
+        "${PROJECT_SOURCE_DIR}/vendor/mpack.c"
+        PROPERTIES
+        COMPILE_FLAGS
+        "-w"
+    )
 endif()
 
 target_include_directories(${LIB_NAME}
-	PUBLIC
-		"$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
-	PRIVATE
-		"$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>"
+    PUBLIC
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+    PRIVATE
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>"
 )
 
 #respect CMAKE_SYSTEM_VERSION
 if(WIN32)
-	if(${CMAKE_SYSTEM_VERSION} MATCHES "^10")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0A00")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.3")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0603")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.2")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0602")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.1")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0601")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.0")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0600")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.2")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0502")
-	elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.1")
-		target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0501")
-	endif()
-	target_link_libraries(${LIB_NAME} PRIVATE shlwapi)
+    if(${CMAKE_SYSTEM_VERSION} MATCHES "^10")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0A00")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.3")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0603")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.2")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0602")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.1")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0601")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^6.0")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0600")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.2")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0502")
+    elseif(${CMAKE_SYSTEM_VERSION} MATCHES "^5.1")
+        target_compile_definitions(${LIB_NAME} PRIVATE "_WIN32_WINNT=0x0501")
+    endif()
+    target_link_libraries(${LIB_NAME} PRIVATE shlwapi)
 endif()
 
 if(LINUX)
-	target_link_libraries(${LIB_NAME} PRIVATE pthread dl)
+    target_link_libraries(${LIB_NAME} PRIVATE pthread dl)
 elseif(ANDROID)
-	target_link_libraries(${LIB_NAME} PRIVATE dl log)
+    target_link_libraries(${LIB_NAME} PRIVATE dl log)
 elseif(MSVC)
-	target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
+    target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
 elseif(MINGW)
-	target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
-	target_compile_options(${LIB_NAME} PRIVATE
-		-Wno-unused-variable
-		-Wno-unused-parameter
-		-Wno-format
-		-Wno-incompatible-pointer-types
-		-Wno-incompatible-function-pointer-types
-	)
+    target_link_libraries(${LIB_NAME} PRIVATE dbghelp)
+    target_compile_options(${LIB_NAME} PRIVATE
+        -Wno-unused-variable
+        -Wno-unused-parameter
+        -Wno-format
+        -Wno-incompatible-pointer-types
+        -Wno-incompatible-function-pointer-types
+    )
 endif()
 
 add_custom_target(uninstall COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
@@ -249,29 +276,29 @@ endif()
 
 # Create the SENTRYConfig.cmake file
 configure_file(cmake/PackageConfig.cmake.in
-	${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake @ONLY)
+    ${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake @ONLY)
 
 if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
-	install(TARGETS ${TARGETS} 
-		EXPORT ${PACKAGE_UPPER_NAME}Targets
-		RUNTIME DESTINATION ${INSTALL_BIN_DIR}
-		ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
-		LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-		INCLUDES DESTINATION ${INSTALL_INC_DIR}
-		FRAMEWORK DESTINATION ${INSTALL_LIB_DIR}
-	)
-	
-	install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/sentry.h"
-		DESTINATION "${INSTALL_INC_DIR}"
-	)
+    install(TARGETS ${TARGETS} 
+        EXPORT ${PACKAGE_UPPER_NAME}Targets
+        RUNTIME DESTINATION ${INSTALL_BIN_DIR}
+        ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
+        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
+        INCLUDES DESTINATION ${INSTALL_INC_DIR}
+        FRAMEWORK DESTINATION ${INSTALL_LIB_DIR}
+    )
+    
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/sentry.h"
+        DESTINATION "${INSTALL_INC_DIR}"
+    )
 
-	# Install the <Package>Config.cmake
-	install(FILES
-		${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake
-		DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+    # Install the <Package>Config.cmake
+    install(FILES
+        ${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake
+        DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
 
-	# Install the export set for use with the install-tree
-	install(EXPORT ${PACKAGE_UPPER_NAME}Targets DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+    # Install the export set for use with the install-tree
+    install(EXPORT ${PACKAGE_UPPER_NAME}Targets DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
 endif()
 
 # Archiving ====================================================================

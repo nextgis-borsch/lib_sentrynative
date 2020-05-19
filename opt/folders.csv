@@ -1,4 +1,4 @@
-.,.,,CHANGELOG.md
+.,.,,LICENSE,CHANGELOG.md
 include,include,,h
 src,src,,"h,c,txt"
 src/backends,src/backends,,"c,cpp"
