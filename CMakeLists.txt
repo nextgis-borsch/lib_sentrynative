@@ -75,6 +75,8 @@ report_version(${PROJECT_NAME} ${VERSION})
 
 if(OSX_FRAMEWORK)
 	set(FRAMEWORK_VERSION ${MAJOR_VER})
+else()
+	set(SOVERSION 0) # TODO: Check if debian/ubuntu package exists and siversion set
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
