@@ -64,7 +64,7 @@ endif()
 set(PACKAGE_NAME ${PROJECT_NAME})
 string(TOUPPER ${PACKAGE_NAME} PACKAGE_UPPER_NAME)
 
-set(LIB_NAME sentry)
+set(LIB_NAME ${PROJECT_NAME})
 set(TARGETS ${LIB_NAME})
 
 include(util)
