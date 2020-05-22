@@ -1,3 +1,4 @@
+#include "sentry_function_transport.h"
 #include "sentry_alloc.h"
 #include "sentry_core.h"
 #include "sentry_envelope.h"
@@ -5,37 +6,47 @@
 #include "sentry_sync.h"
 
 struct transport_state {
-    void (*func)(const sentry_envelope_t *envelope, void *data);
+    void (*func)(sentry_envelope_t *envelope, void *data);
     void *data;
 };
 
 static void
-send_envelope(sentry_envelope_t *envelope, void *_state)
+free_transport(sentry_transport_t *transport)
 {
-    struct transport_state *state = _state;
+    sentry_free(transport->data);
+}
+
+static void
+send_envelope(struct sentry_transport_s *transport, sentry_envelope_t *envelope)
+{
+    struct transport_state *state = transport->data;
     state->func(envelope, state->data);
     sentry_envelope_free(envelope);
 }
 
 sentry_transport_t *
 sentry_new_function_transport(
-    void (*func)(const sentry_envelope_t *envelope, void *data), void *data)
+    void (*func)(sentry_envelope_t *envelope, void *data), void *data)
 {
     SENTRY_DEBUG("initializing function transport");
+    sentry_transport_t *transport = SENTRY_MAKE(sentry_transport_t);
+    if (!transport) {
+        return NULL;
+    }
+
     struct transport_state *state = SENTRY_MAKE(struct transport_state);
     if (!state) {
+        sentry_free(transport);
         return NULL;
     }
+
     state->func = func;
     state->data = data;
-
-    sentry_transport_t *transport = sentry_transport_new(send_envelope);
-    if (!transport) {
-        sentry_free(state);
-        return NULL;
-    }
-    sentry_transport_set_state(transport, state);
-    sentry_transport_set_free_func(transport, sentry_free);
+    transport->data = state;
+    transport->free_func = free_transport;
+    transport->send_envelope_func = send_envelope;
+    transport->startup_func = NULL;
+    transport->shutdown_func = NULL;
 
     return transport;
 }

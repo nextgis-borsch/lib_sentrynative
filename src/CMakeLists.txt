@@ -13,13 +13,9 @@ sentry_target_sources_cwd(sentry
 	sentry_json.c
 	sentry_json.h
 	sentry_modulefinder.h
-	sentry_options.c
-	sentry_options.h
 	sentry_path.h
 	sentry_random.c
 	sentry_random.h
-	sentry_ratelimiter.c
-	sentry_ratelimiter.h
 	sentry_scope.c
 	sentry_scope.h
 	sentry_session.c
@@ -43,6 +39,7 @@ sentry_target_sources_cwd(sentry
 	transports/sentry_disk_transport.c
 	transports/sentry_disk_transport.h
 	transports/sentry_function_transport.c
+	transports/sentry_function_transport.h
 	unwinder/sentry_unwinder.c
 )
 

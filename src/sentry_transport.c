@@ -1,193 +1,108 @@
 #include "sentry_transport.h"
 #include "sentry_alloc.h"
-#include "sentry_envelope.h"
-#include "sentry_options.h"
-#include "sentry_ratelimiter.h"
+#include "sentry_slice.h"
+#include "sentry_utils.h"
 
-#define ENVELOPE_MIME "application/x-sentry-envelope"
-// The headers we use are: `x-sentry-auth`, `content-type`, `content-length`
-#define MAX_HTTP_HEADERS 3
+#define MAX_RATE_LIMITS 4
 
-typedef struct sentry_transport_s {
-    void (*send_envelope_func)(sentry_envelope_t *envelope, void *state);
-    void (*startup_func)(const sentry_options_t *options, void *state);
-    bool (*shutdown_func)(uint64_t timeout, void *state);
-    void (*free_func)(void *state);
-    size_t (*dump_func)(void *state);
-    void *state;
-} sentry_transport_t;
+struct sentry_rate_limiter_s {
+    uint64_t disabled_until[MAX_RATE_LIMITS];
+};
 
-sentry_transport_t *
-sentry_transport_new(
-    void (*send_func)(sentry_envelope_t *envelope, void *state))
+sentry_rate_limiter_t *
+sentry__rate_limiter_new(void)
 {
-    sentry_transport_t *transport = SENTRY_MAKE(sentry_transport_t);
-    if (!transport) {
-        return NULL;
-    }
-    memset(transport, 0, sizeof(sentry_transport_t));
-    transport->send_envelope_func = send_func;
-
-    return transport;
-}
-void
-sentry_transport_set_state(sentry_transport_t *transport, void *state)
-{
-    transport->state = state;
-}
-void
-sentry_transport_set_free_func(
-    sentry_transport_t *transport, void (*free_func)(void *state))
-{
-    transport->free_func = free_func;
-}
-
-void
-sentry_transport_set_startup_func(sentry_transport_t *transport,
-    void (*startup_func)(const sentry_options_t *options, void *state))
-{
-    transport->startup_func = startup_func;
-}
-
-void
-sentry_transport_set_shutdown_func(sentry_transport_t *transport,
-    bool (*shutdown_func)(uint64_t timeout, void *state))
-{
-    transport->shutdown_func = shutdown_func;
-}
-
-void
-sentry__transport_send_envelope(
-    sentry_transport_t *transport, sentry_envelope_t *envelope)
-{
-    SENTRY_TRACE("sending envelope");
-    transport->send_envelope_func(envelope, transport->state);
-}
-
-void
-sentry__transport_startup(
-    sentry_transport_t *transport, const sentry_options_t *options)
-{
-    if (transport->startup_func) {
-        SENTRY_TRACE("starting transport");
-        transport->startup_func(options, transport->state);
-    }
+    sentry_rate_limiter_t *rl = SENTRY_MAKE(sentry_rate_limiter_t);
+    rl->disabled_until[SENTRY_RL_CATEGORY_ANY] = 0;
+    rl->disabled_until[SENTRY_RL_CATEGORY_ERROR] = 0;
+    rl->disabled_until[SENTRY_RL_CATEGORY_SESSION] = 0;
+    rl->disabled_until[SENTRY_RL_CATEGORY_TRANSACTION] = 0;
+    return rl;
 }
 
 bool
-sentry__transport_shutdown(sentry_transport_t *transport, uint64_t timeout)
+sentry__rate_limiter_update_from_header(
+    sentry_rate_limiter_t *rl, const char *sentry_header)
 {
-    if (transport->shutdown_func) {
-        SENTRY_TRACE("shutting down transport");
-        return transport->shutdown_func(timeout, transport->state);
+    sentry_slice_t slice = sentry__slice_from_str(sentry_header);
+
+    while (true) {
+        slice = sentry__slice_trim(slice);
+        uint64_t retry_after = 0;
+        if (!sentry__slice_consume_uint64(&slice, &retry_after)) {
+            return false;
+        }
+        retry_after *= 1000;
+        retry_after += sentry__msec_time();
+
+        if (!sentry__slice_consume_if(&slice, ':')) {
+            return false;
+        }
+
+        sentry_slice_t categories = sentry__slice_split_at(slice, ':');
+        if (categories.len == 0) {
+            rl->disabled_until[SENTRY_RL_CATEGORY_ANY] = retry_after;
+        }
+
+        while (categories.len > 0) {
+            sentry_slice_t category = sentry__slice_split_at(categories, ';');
+            if (sentry__slice_eqs(category, "error")) {
+                rl->disabled_until[SENTRY_RL_CATEGORY_ERROR] = retry_after;
+            } else if (sentry__slice_eqs(category, "session")) {
+                rl->disabled_until[SENTRY_RL_CATEGORY_SESSION] = retry_after;
+            } else if (sentry__slice_eqs(category, "transaction")) {
+                rl->disabled_until[SENTRY_RL_CATEGORY_TRANSACTION]
+                    = retry_after;
+            }
+
+            categories = sentry__slice_advance(categories, category.len);
+        }
+
+        size_t next = sentry__slice_find(slice, ',');
+        if (next != (size_t)-1) {
+            slice = sentry__slice_advance(slice, next + 1);
+        } else {
+            break;
+        }
     }
+
     return true;
 }
 
-void
-sentry__transport_set_dump_func(
-    sentry_transport_t *transport, size_t (*dump_func)(void *state))
+bool
+sentry__rate_limiter_update_from_http_retry_after(
+    sentry_rate_limiter_t *rl, const char *retry_after)
 {
-    transport->dump_func = dump_func;
+    sentry_slice_t slice = sentry__slice_from_str(retry_after);
+    uint64_t eta = 60;
+    sentry__slice_consume_uint64(&slice, &eta);
+    rl->disabled_until[SENTRY_RL_CATEGORY_ANY]
+        = sentry__msec_time() + eta * 1000;
+    return true;
 }
 
-size_t
-sentry__transport_dump_queue(sentry_transport_t *transport)
+bool
+sentry__rate_limiter_is_disabled(const sentry_rate_limiter_t *rl, int category)
 {
-    if (!transport->dump_func) {
-        return 0;
-    }
-    size_t dumped = transport->dump_func(transport->state);
-    SENTRY_TRACEF("dumped %zu in-flight envelopes to disk", dumped);
-    return dumped;
+    uint64_t now = sentry__msec_time();
+    return rl->disabled_until[SENTRY_RL_CATEGORY_ANY] > now
+        || rl->disabled_until[category] > now;
 }
 
 void
-sentry_transport_free(sentry_transport_t *transport)
+sentry__rate_limiter_free(sentry_rate_limiter_t *rl)
 {
-    if (!transport) {
+    if (!rl) {
         return;
     }
-    if (transport->free_func) {
-        transport->free_func(transport->state);
-    }
-    sentry_free(transport);
+    sentry_free(rl);
 }
 
-sentry_prepared_http_request_t *
-sentry__prepare_http_request(
-    sentry_envelope_t *envelope, const sentry_rate_limiter_t *rl)
+#if SENTRY_UNITTEST
+uint64_t
+sentry__rate_limiter_get_disabled_until(
+    const sentry_rate_limiter_t *rl, int category)
 {
-    const sentry_options_t *options = sentry_get_options();
-    if (!options || options->dsn.empty) {
-        return NULL;
-    }
-
-    size_t body_len = 0;
-    bool body_owned = true;
-    char *body = sentry_envelope_serialize_ratelimited(
-        envelope, rl, &body_len, &body_owned);
-    if (!body) {
-        return NULL;
-    }
-
-    sentry_prepared_http_request_t *req
-        = SENTRY_MAKE(sentry_prepared_http_request_t);
-    if (!req) {
-        if (body_owned) {
-            sentry_free(body);
-        }
-        return NULL;
-    }
-    req->headers = sentry_malloc(
-        sizeof(sentry_prepared_http_header_t) * MAX_HTTP_HEADERS);
-    if (!req->headers) {
-        sentry_free(req);
-        if (body_owned) {
-            sentry_free(body);
-        }
-        return NULL;
-    }
-    req->headers_len = 0;
-
-    req->method = "POST";
-    req->url = sentry__dsn_get_envelope_url(&options->dsn);
-
-    sentry_prepared_http_header_t *h;
-    if (!options->dsn.empty) {
-        h = &req->headers[req->headers_len++];
-        h->key = "x-sentry-auth";
-        h->value = sentry__dsn_get_auth_header(&options->dsn);
-    }
-
-    h = &req->headers[req->headers_len++];
-    h->key = "content-type";
-    h->value = sentry__string_clone(ENVELOPE_MIME);
-
-    h = &req->headers[req->headers_len++];
-    h->key = "content-length";
-    h->value = sentry__int64_to_string((int64_t)body_len);
-
-    req->body = body;
-    req->body_len = body_len;
-    req->body_owned = body_owned;
-
-    return req;
+    return rl->disabled_until[category];
 }
-
-void
-sentry__prepared_http_request_free(sentry_prepared_http_request_t *req)
-{
-    if (!req) {
-        return;
-    }
-    sentry_free(req->url);
-    for (size_t i = 0; i < req->headers_len; i++) {
-        sentry_free(req->headers[i].value);
-    }
-    sentry_free(req->headers);
-    if (req->body_owned) {
-        sentry_free(req->body);
-    }
-    sentry_free(req);
-}
+#endif

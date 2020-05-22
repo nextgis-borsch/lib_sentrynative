@@ -4,17 +4,7 @@
  * sentry-native is a C client to send events to native from
  * C and C++ applications.  It can work together with breakpad/crashpad
  * but also send events on its own.
- *
- * NOTE on encodings:
- *
- * Sentry will assume an encoding of UTF-8 for all string data that is captured
- * and being sent to sentry as an Event.
- * All the functions that are dealing with *paths* will assume an OS-specific
- * encoding, typically ANSI on Windows, UTF-8 macOS, and the locale encoding on
- * Linux; and they provide wchar-compatible alternatives on Windows which are
- * preferred.
  */
-
 #ifndef SENTRY_H_INCLUDED
 #define SENTRY_H_INCLUDED
 
@@ -24,7 +14,7 @@ extern "C" {
 
 /* SDK Version */
 #define SENTRY_SDK_NAME "sentry.native"
-#define SENTRY_SDK_VERSION "0.3.0"
+#define SENTRY_SDK_VERSION "0.2.6"
 #define SENTRY_SDK_USER_AGENT (SENTRY_SDK_NAME "/" SENTRY_SDK_VERSION)
 
 /* common platform detection */
@@ -451,13 +441,9 @@ SENTRY_API void sentry_uuid_as_bytes(const sentry_uuid_t *uuid, char bytes[16]);
  */
 SENTRY_API void sentry_uuid_as_string(const sentry_uuid_t *uuid, char str[37]);
 
-/**
- * A Sentry Envelope.
- *
- * The Envelope is an abstract type which represents a payload being sent to
- * sentry. It can contain one or more items, typically an Event.
- * See https://develop.sentry.dev/sdk/envelopes/
- */
+struct sentry_options_s;
+typedef struct sentry_options_s sentry_options_t;
+
 struct sentry_envelope_s;
 typedef struct sentry_envelope_s sentry_envelope_t;
 
@@ -483,88 +469,40 @@ SENTRY_API char *sentry_envelope_serialize(
     const sentry_envelope_t *envelope, size_t *size_out);
 
 /**
- * Serializes the envelope into a file.
+ * serializes the envelope into a file.
  *
- * `path` is assumed to be in platform-specific filesystem path encoding.
- *
- * Returns 0 on success.
+ * returns 0 on success.
  */
 SENTRY_API int sentry_envelope_write_to_file(
     const sentry_envelope_t *envelope, const char *path);
 
 /**
- * The Sentry Client Options.
- *
- * See https://docs.sentry.io/error-reporting/configuration/
+ * Type of the callback for transports.
  */
-struct sentry_options_s;
-typedef struct sentry_options_s sentry_options_t;
+typedef void (*sentry_transport_function_t)(
+    const sentry_envelope_t *envelope, void *data);
 
 /**
  * This represents an interface for user-defined transports.
  *
- * Transports are responsible for sending envelopes to sentry and are the last
- * step in the event pipeline. A transport has the following hooks, all of which
- * take the user provided `state` as last parameter. The transport state needs
- * to be set with `sentry_transport_set_state` and typically holds handles and
- * other information that can be reused across requests.
- *
- * * `send_func`: This function will take ownership of an envelope, and is
- *   responsible for freeing it via `sentry_envelope_free`.
- * * `startup_func`: This hook will be called by sentry and instructs the
- *   transport to initialize itself.
- * * `shutdown_func`: Instructs the transport to flush its queue and shut down.
- *   This hook receives a millisecond-resolution `timeout` parameter and should
- *   return `true` when the transport was flushed and shut down successfully.
- *   In case of `false`, sentry will log an error, but continue with freeing the
- *   transport.
- * * `free_func`: Frees the transports `state`. This hook might be called even
- *   though `shudown_func` returned `false` previously.
- *
- * The transport interface might be extended in the future with hooks to flush
- * its internal queue without shutting down, and to dump its internal queue to
- * disk in case of a hard crash.
+ * This type is *deprecated*, and will be replaced by an opaque pointer type and
+ * builder methods in a future version.
  */
 struct sentry_transport_s;
-typedef struct sentry_transport_s sentry_transport_t;
+typedef struct sentry_transport_s {
+    void (*send_envelope_func)(
+        struct sentry_transport_s *, sentry_envelope_t *envelope);
+    void (*startup_func)(struct sentry_transport_s *);
+    void (*shutdown_func)(struct sentry_transport_s *);
+    void (*free_func)(struct sentry_transport_s *);
+    void *data;
+} sentry_transport_t;
 
 /**
- * Creates a new transport with an initial `send_func`.
+ * Creates a new function transport.
  */
-SENTRY_API sentry_transport_t *sentry_transport_new(
-    void (*send_func)(sentry_envelope_t *envelope, void *state));
-
-/**
- * Sets the transport `state`.
- *
- * If the state is owned by the transport and needs to be freed, use
- * `sentry_transport_set_free_func` to set an appropriate hook.
- */
-SENTRY_API void sentry_transport_set_state(
-    sentry_transport_t *transport, void *state);
-
-/**
- * Sets the transport hook to free the transport `state`.
- */
-SENTRY_API void sentry_transport_set_free_func(
-    sentry_transport_t *transport, void (*free_func)(void *state));
-
-/**
- * Sets the transport startup hook.
- */
-SENTRY_API void sentry_transport_set_startup_func(sentry_transport_t *transport,
-    void (*startup_func)(const sentry_options_t *options, void *state));
-
-/**
- * Sets the transport shutdown hook.
- *
- * This hook will receive a millisecond-resolution timeout; it should return
- * `true` in case all the pending envelopes have been sent within the timeout,
- * or `false` if the timeout was hit.
- */
-SENTRY_API void sentry_transport_set_shutdown_func(
-    sentry_transport_t *transport,
-    bool (*shutdown_func)(uint64_t timeout, void *state));
+SENTRY_API sentry_transport_t *sentry_new_function_transport(
+    void (*func)(sentry_envelope_t *envelope, void *data), void *data);
 
 /**
  * Generic way to free a transport.
@@ -572,18 +510,19 @@ SENTRY_API void sentry_transport_set_shutdown_func(
 SENTRY_API void sentry_transport_free(sentry_transport_t *transport);
 
 /**
- * Create a new function transport.
+ * This represents an opaque backend.
  *
- * It is a convenience function which works with a borrowed `data`, and will
- * automatically free the envelope, so the user provided function does not need
- * to do that.
+ * This declaration is *deprecated* and will be removed in a future version.
+ */
+struct sentry_backend_s;
+typedef struct sentry_backend_s sentry_backend_t;
+
+/**
+ * Generic way to free a backend.
  *
  * This function is *deprecated* and will be removed in a future version.
- * It is here for backwards compatibility. Users should migrate to the
- * `sentry_transport_new` API.
  */
-SENTRY_API sentry_transport_t *sentry_new_function_transport(
-    void (*func)(const sentry_envelope_t *envelope, void *data), void *data);
+SENTRY_API void sentry_backend_free(sentry_backend_t *backend);
 
 /**
  * Type of the callback for modifying events.
@@ -735,10 +674,6 @@ SENTRY_API int sentry_options_get_require_user_consent(
 
 /**
  * Adds a new attachment to be sent along.
- *
- * `path` is assumed to be in platform-specific filesystem path encoding.
- * API Users on windows are encouraged to use `sentry_options_add_attachmentw`
- * instead.
  */
 SENTRY_API void sentry_options_add_attachment(
     sentry_options_t *opts, const char *name, const char *path);
@@ -752,10 +687,6 @@ SENTRY_API void sentry_options_add_attachment(
  *
  * It is recommended that library users set an explicit handler path, depending
  * on the directory/executable structure of their app.
- *
- * `path` is assumed to be in platform-specific filesystem path encoding.
- * API Users on windows are encouraged to use `sentry_options_set_handler_pathw`
- * instead.
  */
 SENTRY_API void sentry_options_set_handler_path(
     sentry_options_t *opts, const char *path);
@@ -772,11 +703,7 @@ SENTRY_API void sentry_options_set_handler_path(
  * inside of `sentry_init`.
  *
  * It is recommended that library users set an explicit absolute path, depending
- * on their apps runtime directory.
- *
- * `path` is assumed to be in platform-specific filesystem path encoding.
- * API Users on windows are encouraged to use
- * `sentry_options_set_database_pathw` instead.
+ * on their own apps directory.
  */
 SENTRY_API void sentry_options_set_database_path(
     sentry_options_t *opts, const char *path);
@@ -875,8 +802,7 @@ SENTRY_API sentry_uuid_t sentry_capture_event(sentry_value_t event);
  *
  * This is safe to be called from a crashing thread and may not return.
  */
-SENTRY_EXPERIMENTAL_API void sentry_handle_exception(
-    const sentry_ucontext_t *uctx);
+SENTRY_EXPERIMENTAL_API void sentry_handle_exception(sentry_ucontext_t *uctx);
 
 /**
  * Adds the breadcrumb to be sent in case of an event.
@@ -925,9 +851,6 @@ SENTRY_API void sentry_remove_context(const char *key);
 
 /**
  * Sets the event fingerprint.
- *
- * This accepts a variable number of arguments, and needs to be terminated by a
- * trailing `NULL`.
  */
 SENTRY_API void sentry_set_fingerprint(const char *fingerprint, ...);
 

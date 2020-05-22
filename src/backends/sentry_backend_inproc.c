@@ -3,9 +3,7 @@
 #include "sentry_alloc.h"
 #include "sentry_backend.h"
 #include "sentry_core.h"
-#include "sentry_database.h"
 #include "sentry_envelope.h"
-#include "sentry_options.h"
 #include "sentry_scope.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
@@ -149,7 +147,7 @@ make_signal_event(
 }
 
 static void
-handle_ucontext(const sentry_ucontext_t *uctx)
+handle_ucontext(sentry_ucontext_t *uctx)
 {
     const struct signal_slot *sig_slot = NULL;
     for (int i = 0; i < SIGNAL_COUNT; ++i) {
@@ -208,7 +206,7 @@ handle_signal(int signum, siginfo_t *info, void *user_context)
 }
 
 static void
-handle_except(sentry_backend_t *UNUSED(backend), const sentry_ucontext_t *uctx)
+handle_except(sentry_backend_t *UNUSED(backend), sentry_ucontext_t *uctx)
 {
     handle_ucontext(uctx);
 }

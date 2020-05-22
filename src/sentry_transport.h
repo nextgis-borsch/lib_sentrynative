@@ -3,36 +3,6 @@
 
 #include "sentry_boot.h"
 
-typedef struct sentry_rate_limiter_s sentry_rate_limiter_t;
-
-/**
- * Sets the dump function of the transport.
- *
- * This function is called during a hard crash to dump any internal send queue
- * to disk, using `sentry__run_write_envelope`. The function runs inside a
- * signal handler, and appropriate restrictions apply.
- */
-void sentry__transport_set_dump_func(
-    sentry_transport_t *transport, size_t (*dump_func)(void *state));
-
-/**
- * Submit the given envelope to the transport.
- */
-void sentry__transport_send_envelope(
-    sentry_transport_t *transport, sentry_envelope_t *envelope);
-
-/**
- * Calls the transports startup hook.
- */
-void sentry__transport_startup(
-    sentry_transport_t *transport, const sentry_options_t *options);
-
-/**
- * Instructs the transport to shut down.
- */
-bool sentry__transport_shutdown(
-    sentry_transport_t *transport, uint64_t timeout);
-
 /**
  * This will create a new platform specific HTTP transport.
  */
@@ -42,37 +12,54 @@ sentry_transport_t *sentry__transport_new_default(void);
  * This function will instruct the platform specific transport to dump all the
  * envelopes in its send queue to disk.
  */
-size_t sentry__transport_dump_queue(sentry_transport_t *transport);
+void sentry__transport_dump_queue(sentry_transport_t *transport);
 
-typedef struct sentry_prepared_http_header_s {
-    const char *key;
-    char *value;
-} sentry_prepared_http_header_t;
+#define SENTRY_RL_CATEGORY_ANY 0
+#define SENTRY_RL_CATEGORY_ERROR 1
+#define SENTRY_RL_CATEGORY_SESSION 2
+#define SENTRY_RL_CATEGORY_TRANSACTION 3
 
-/**
- * This represents a HTTP request, with method, url, headers and a body.
- */
-typedef struct sentry_prepared_http_request_s {
-    const char *method;
-    char *url;
-    sentry_prepared_http_header_t *headers;
-    size_t headers_len;
-    char *body;
-    size_t body_len;
-    bool body_owned;
-} sentry_prepared_http_request_t;
+struct sentry_rate_limiter_s;
+typedef struct sentry_rate_limiter_s sentry_rate_limiter_t;
 
 /**
- * Consumes the given envelope and transforms it into into a prepared http
- * request. This can return NULL when all the items in the envelope have been
- * rate limited.
+ * This will create a new rate limiter.
  */
-sentry_prepared_http_request_t *sentry__prepare_http_request(
-    sentry_envelope_t *envelope, const sentry_rate_limiter_t *rl);
+sentry_rate_limiter_t *sentry__rate_limiter_new(void);
 
 /**
- * Free a previously allocated HTTP request.
+ * Free a previously allocated rate limiter.
  */
-void sentry__prepared_http_request_free(sentry_prepared_http_request_t *req);
+void sentry__rate_limiter_free(sentry_rate_limiter_t *rl);
+
+/**
+ * This will update the rate limiters internal state based on the
+ * `X-Sentry-Rate-Limits` header.
+ */
+bool sentry__rate_limiter_update_from_header(
+    sentry_rate_limiter_t *rl, const char *sentry_header);
+
+/**
+ * This will update the rate limiters internal state based on the `Retry-After`
+ * header.
+ */
+bool sentry__rate_limiter_update_from_http_retry_after(
+    sentry_rate_limiter_t *rl, const char *retry_after);
+
+/**
+ * This will return `true` if the specified `category` is currently rate
+ * limited.
+ */
+bool sentry__rate_limiter_is_disabled(
+    const sentry_rate_limiter_t *rl, int category);
+
+#if SENTRY_UNITTEST
+/**
+ * The rate limiters state is completely opaque. Unless in tests, where we would
+ * want to actually peek into the specific rate limiting `category`.
+ */
+uint64_t sentry__rate_limiter_get_disabled_until(
+    const sentry_rate_limiter_t *rl, int category);
+#endif
 
 #endif

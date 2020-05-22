@@ -4,9 +4,7 @@ extern "C" {
 #include "sentry_alloc.h"
 #include "sentry_backend.h"
 #include "sentry_core.h"
-#include "sentry_database.h"
 #include "sentry_envelope.h"
-#include "sentry_options.h"
 #include "sentry_path.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
@@ -32,10 +30,10 @@ typedef struct {
 
 static void
 sentry__breakpad_backend_send_envelope(
-    sentry_envelope_t *envelope, void *_state)
+    sentry_transport_t *transport, sentry_envelope_t *envelope)
 {
     const breakpad_transport_state_t *state
-        = (const breakpad_transport_state_t *)_state;
+        = (const breakpad_transport_state_t *)transport->data;
 
     sentry_path_t *dump_path = sentry__path_from_str(state->dump_path);
     if (!dump_path) {
@@ -70,21 +68,24 @@ static void
 sentry__enforce_breakpad_transport(
     const sentry_options_t *options, const char *dump_path)
 {
-    breakpad_transport_state_t *state = SENTRY_MAKE(breakpad_transport_state_t);
-    if (!state) {
+    sentry_transport_t *transport = SENTRY_MAKE(sentry_transport_t);
+    if (!transport) {
         return;
     }
+    breakpad_transport_state_t *state = SENTRY_MAKE(breakpad_transport_state_t);
+    if (!state) {
+        sentry_free(transport);
+        return;
+    }
+
     state->run = options->run;
     state->dump_path = dump_path;
 
-    sentry_transport_t *transport
-        = sentry_transport_new(sentry__breakpad_backend_send_envelope);
-    if (!transport) {
-        sentry_free(state);
-        return;
-    }
-    sentry_transport_set_state(transport, state);
-    sentry_transport_set_free_func(transport, sentry_free);
+    transport->data = state;
+    transport->free_func = NULL;
+    transport->send_envelope_func = sentry__breakpad_backend_send_envelope;
+    transport->startup_func = NULL;
+    transport->shutdown_func = NULL;
 
     ((sentry_options_t *)options)->transport = transport;
 }
@@ -150,7 +151,7 @@ sentry__breakpad_backend_shutdown(sentry_backend_t *backend)
 
 static void
 sentry__breakpad_backend_except(
-    sentry_backend_t *backend, const sentry_ucontext_t *context)
+    sentry_backend_t *backend, sentry_ucontext_t *context)
 {
     google_breakpad::ExceptionHandler *eh
         = (google_breakpad::ExceptionHandler *)backend->data;
