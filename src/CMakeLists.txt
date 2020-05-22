@@ -1,4 +1,4 @@
-sentry_target_sources_cwd(sentry
+sentry_target_sources_cwd(${LIB_NAME}
 	sentry_alloc.c
 	sentry_alloc.h
 	sentry_backend.c
@@ -45,14 +45,14 @@ sentry_target_sources_cwd(sentry
 
 # generic platform / path / symbolizer
 if(WIN32)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		sentry_windows_dbghelp.c
 		sentry_windows_dbghelp.h
 		path/sentry_path_windows.c
 		symbolizer/sentry_symbolizer_windows.c
 	)
 else()
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		sentry_unix_pageallocator.c
 		sentry_unix_pageallocator.h
 		sentry_unix_spinlock.h
@@ -63,69 +63,69 @@ endif()
 
 # module finder
 if(WIN32)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		modulefinder/sentry_modulefinder_windows.c
 	)
 elseif(APPLE)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		modulefinder/sentry_modulefinder_apple.c
 	)
 elseif(LINUX OR ANDROID)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		modulefinder/sentry_modulefinder_linux.c
 	)
 endif()
 
 # transport
 if(SENTRY_TRANSPORT_CURL)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		transports/sentry_transport_curl.c
 	)
 elseif(SENTRY_TRANSPORT_WINHTTP)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		transports/sentry_transport_winhttp.c
 	)
 elseif(SENTRY_TRANSPORT_NONE)
-	sentry_target_sources_cwd(sentry
+	sentry_target_sources_cwd(${LIB_NAME}
 		transports/sentry_transport_none.c
 	)
 endif()
 
 # backends
 if(SENTRY_BACKEND_CRASHPAD)
-    sentry_target_sources_cwd(sentry
+    sentry_target_sources_cwd(${LIB_NAME}
         backends/sentry_backend_crashpad.cpp
     )
 elseif(SENTRY_BACKEND_BREAKPAD)
-    sentry_target_sources_cwd(sentry
+    sentry_target_sources_cwd(${LIB_NAME}
         backends/sentry_backend_breakpad.cpp
     )
 elseif(SENTRY_BACKEND_INPROC)
-    sentry_target_sources_cwd(sentry
+    sentry_target_sources_cwd(${LIB_NAME}
         backends/sentry_backend_inproc.c
     )
 elseif(SENTRY_BACKEND_NONE)
-    sentry_target_sources_cwd(sentry
+    sentry_target_sources_cwd(${LIB_NAME}
         backends/sentry_backend_none.c
     )
 endif()
 
 # unwinder
 if(SENTRY_WITH_LIBBACKTRACE)
-	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_LIBBACKTRACE)
-	sentry_target_sources_cwd(sentry
+	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_WITH_UNWINDER_LIBBACKTRACE)
+	sentry_target_sources_cwd(${LIB_NAME}
 		unwinder/sentry_unwinder_libbacktrace.c
 	)
 endif()
 if(SENTRY_WITH_LIBUNWINDSTACK)
-	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_LIBUNWINDSTACK)
-	sentry_target_sources_cwd(sentry
+	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_WITH_UNWINDER_LIBUNWINDSTACK)
+	sentry_target_sources_cwd(${LIB_NAME}
 		unwinder/sentry_unwinder_libunwindstack.cpp
 	)
 endif()
 if(WIN32)
-	target_compile_definitions(sentry PRIVATE SENTRY_WITH_UNWINDER_DBGHELP)
-	sentry_target_sources_cwd(sentry
+	target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_WITH_UNWINDER_DBGHELP)
+	sentry_target_sources_cwd(${LIB_NAME}
 		unwinder/sentry_unwinder_dbghelp.c
 	)
 endif()
