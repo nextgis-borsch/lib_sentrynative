@@ -119,7 +119,9 @@ sentry_shutdown(void)
             SENTRY_TRACE("shutting down backend");
             options->backend->shutdown_func(options->backend);
         }
-        sentry__run_clean(options->run);
+        if(options->run) {
+            sentry__run_clean(options->run);
+        }
     }
 
     sentry__mutex_lock(&g_options_mutex);
