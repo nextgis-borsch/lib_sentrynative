@@ -130,6 +130,9 @@ sentry__run_write_session(
 bool
 sentry__run_clear_session(const sentry_run_t *run)
 {
+    if(!run) {
+        return true;
+    }
     int rv = sentry__path_remove(run->session_path);
     return !rv;
 }

@@ -236,12 +236,10 @@ sentry_capture_event(sentry_value_t event)
     sentry_uuid_t event_id;
     sentry__ensure_event_id(event, &event_id);
 
-#ifdef SENTRY_PLATFORM_WINDOWS
     SENTRY_WITH_SCOPE (scope) {
         SENTRY_TRACE("merging scope into event");
         sentry__scope_apply_to_event(scope, event, SENTRY_SCOPE_ALL);
     }
-#endif
 
     if (opts->before_send_func) {
         event = opts->before_send_func(event, NULL, opts->before_send_data);
