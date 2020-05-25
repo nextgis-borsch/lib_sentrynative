@@ -117,7 +117,7 @@ if(SENTRY_TRANSPORT_WINHTTP AND NOT WIN32)
     message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
 endif()
 
-set(SENTRY_BACKEND_NONE TRUE)
+set(SENTRY_BACKEND_CRASHPAD TRUE)
 
 message(STATUS "SENTRY_TRANSPORT=${SENTRY_TRANSPORT}")
 
@@ -201,6 +201,10 @@ if(SENTRY_TRANSPORT_CURL)
 elseif(SENTRY_TRANSPORT_WINHTTP)
     target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
+
+find_anyproject(CRASHPAD REQUIRED SHARED OFF)
+
+target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
 
 set_property(TARGET ${LIB_NAME} PROPERTY C_VISIBILITY_PRESET hidden)
 if(MSVC)
