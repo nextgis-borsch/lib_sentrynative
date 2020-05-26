@@ -117,7 +117,11 @@ if(SENTRY_TRANSPORT_WINHTTP AND NOT WIN32)
     message(FATAL_ERROR "The winhttp transport is only supported on Windows.")
 endif()
 
-set(SENTRY_BACKEND_CRASHPAD TRUE)
+if(WIN32)
+    set(SENTRY_BACKEND_CRASHPAD TRUE)
+else()
+    set(SENTRY_BACKEND_NONE TRUE)
+endif()
 
 message(STATUS "SENTRY_TRANSPORT=${SENTRY_TRANSPORT}")
 
@@ -202,9 +206,10 @@ elseif(SENTRY_TRANSPORT_WINHTTP)
     target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
 
-find_anyproject(CRASHPAD REQUIRED SHARED OFF CMAKE_ARGS -DWITH_MINICHROMIUM_EXTERNAL=ON -DWITH_ZLIB_EXTERNAL=ON)
-
-target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
+if(WIN32)
+    find_anyproject(CRASHPAD REQUIRED SHARED OFF CMAKE_ARGS -DWITH_MINICHROMIUM_EXTERNAL=ON -DWITH_ZLIB_EXTERNAL=ON)
+    target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
+endif()
 
 set_property(TARGET ${LIB_NAME} PROPERTY C_VISIBILITY_PRESET hidden)
 if(MSVC)
@@ -305,6 +310,10 @@ if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
 
     # Install the export set for use with the install-tree
     install(EXPORT ${PACKAGE_UPPER_NAME}Targets DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+endif()
+
+if(WIN32)
+    install(FILES ${CMAKE_BINARY_DIR}/third-party/install/bin/crashpad_handler.exe DESTINATION ${INSTALL_BIN_DIR})
 endif()
 
 # Archiving ====================================================================
