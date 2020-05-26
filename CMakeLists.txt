@@ -202,7 +202,7 @@ elseif(SENTRY_TRANSPORT_WINHTTP)
     target_link_libraries(${LIB_NAME} PRIVATE winhttp)
 endif()
 
-find_anyproject(CRASHPAD REQUIRED SHARED OFF)
+find_anyproject(CRASHPAD REQUIRED SHARED OFF CMAKE_ARGS -DWITH_MINICHROMIUM_EXTERNAL=ON)
 
 target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
 
