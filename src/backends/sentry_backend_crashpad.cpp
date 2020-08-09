@@ -108,13 +108,12 @@ sentry__crashpad_backend_startup(sentry_backend_t *backend)
     sentry__path_free(absolute_handler_path);
 
     std::map<std::string, std::string> annotations;
-    std::map<std::string, base::FilePath> file_attachments;
+    std::vector<base::FilePath> file_attachments;
 
     // register attachments
     for (sentry_attachment_t *attachment = options->attachments; attachment;
          attachment = attachment->next) {
-        file_attachments.emplace(
-            attachment->name, base::FilePath(attachment->path->path));
+        file_attachments.push_back(base::FilePath(attachment->path->path));
     }
 
     // and add the serialized event, and two rotating breadcrumb files
@@ -130,12 +129,9 @@ sentry__crashpad_backend_startup(sentry_backend_t *backend)
     sentry__path_touch(data->breadcrumb1_path);
     sentry__path_touch(data->breadcrumb2_path);
 
-    file_attachments.emplace(
-        "__sentry-event", base::FilePath(data->event_path->path));
-    file_attachments.emplace(
-        "__sentry-breadcrumb1", base::FilePath(data->breadcrumb1_path->path));
-    file_attachments.emplace(
-        "__sentry-breadcrumb2", base::FilePath(data->breadcrumb2_path->path));
+    file_attachments.push_back(base::FilePath(data->event_path->path));
+    file_attachments.push_back(base::FilePath(data->breadcrumb1_path->path));
+    file_attachments.push_back(base::FilePath(data->breadcrumb2_path->path));
 
     std::vector<std::string> arguments;
     arguments.push_back("--no-rate-limit");
@@ -155,10 +151,10 @@ sentry__crashpad_backend_startup(sentry_backend_t *backend)
     char *minidump_url = sentry__dsn_get_minidump_url(&options->dsn);
     std::string url = minidump_url ? std::string(minidump_url) : std::string();
     sentry_free(minidump_url);
-    bool success = client.StartHandlerWithAttachments(handler, database,
-        database, url, annotations, file_attachments, arguments,
+    bool success = client.StartHandler(handler, database,
+        database, url, annotations, arguments,
         /* restartable */ true,
-        /* asynchronous_start */ false);
+        /* asynchronous_start */ false, file_attachments);
 
     if (success) {
         SENTRY_DEBUG("started crashpad client handler");
