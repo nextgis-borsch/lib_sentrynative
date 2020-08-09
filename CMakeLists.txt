@@ -76,7 +76,7 @@ report_version(${PROJECT_NAME} ${VERSION})
 if(OSX_FRAMEWORK)
 	set(FRAMEWORK_VERSION ${MAJOR_VER})
 else()
-	set(SOVERSION 0) # TODO: Check if debian/ubuntu package exists and siversion set
+	set(SOVERSION 0) # TODO: Check if debian/ubuntu package exists and soversion set
 endif()
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -158,8 +158,6 @@ endfunction()
 
 # ===== sentry library =====
 
-
-
 if(BUILD_SHARED_LIBS OR OSX_FRAMEWORK)
 	add_library(${LIB_NAME} SHARED "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
     target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
@@ -207,11 +205,16 @@ elseif(SENTRY_TRANSPORT_WINHTTP)
 endif()
 
 if(WIN32)
+    find_anyproject(MINICHROMIUM REQUIRED SHARED OFF CMAKE_ARGS -DWITH_ZLIB_EXTERNAL=ON)
     find_anyproject(CRASHPAD REQUIRED SHARED OFF CMAKE_ARGS -DWITH_MINICHROMIUM_EXTERNAL=ON -DWITH_ZLIB_EXTERNAL=ON)
     target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
     if (MSVC)
         set_target_properties(${LIB_NAME} PROPERTIES LINK_FLAGS -SAFESEH:NO)
     endif()
+elseif(APPLE)    
+    find_anyproject(MINICHROMIUM REQUIRED SHARED OFF)
+    find_anyproject(CRASHPAD REQUIRED SHARED OFF CMAKE_ARGS -DWITH_MINICHROMIUM_EXTERNAL=ON)
+    target_link_libraries(${LIB_NAME} PRIVATE ${CRASHPAD_LIBRARIES})
 endif()
 
 set_property(TARGET ${LIB_NAME} PROPERTY C_VISIBILITY_PRESET hidden)
@@ -316,7 +319,9 @@ if(NOT SKIP_INSTALL_LIBRARIES AND NOT SKIP_INSTALL_ALL)
 endif()
 
 if(WIN32)
-    install(FILES ${CMAKE_BINARY_DIR}/third-party/install/bin/crashpad_handler.exe DESTINATION ${INSTALL_BIN_DIR})
+    install(PROGRAMS ${CMAKE_BINARY_DIR}/third-party/install/bin/crashpad_handler.exe DESTINATION ${INSTALL_BIN_DIR})
+elseif(APPLE)
+    install(PROGRAMS ${CMAKE_BINARY_DIR}/third-party/install/bin/crashpad_handler DESTINATION ${INSTALL_BIN_DIR})
 endif()
 
 # Archiving ====================================================================
