@@ -1,63 +1,75 @@
 #include "sentry_alloc.h"
 #include "sentry_core.h"
+#include "sentry_database.h"
 #include "sentry_envelope.h"
+#include "sentry_options.h"
+#include "sentry_ratelimiter.h"
 #include "sentry_string.h"
 #include "sentry_sync.h"
 #include "sentry_transport.h"
+#include "sentry_utils.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <winhttp.h>
 
 typedef struct {
-    sentry_bgworker_t *bgworker;
+    sentry_dsn_t *dsn;
     wchar_t *user_agent;
     wchar_t *proxy;
-    sentry_rate_limiter_t *rl;
+    sentry_rate_limiter_t *ratelimiter;
     HINTERNET session;
     HINTERNET connect;
+    bool debug;
+} winhttp_bgworker_state_t;
 
-    bool initialized;
-} winhttp_transport_state_t;
-
-struct task_state {
-    winhttp_transport_state_t *transport_state;
-    sentry_envelope_t *envelope;
-};
-
-static winhttp_transport_state_t *
-new_transport_state(void)
+static winhttp_bgworker_state_t *
+sentry__winhttp_bgworker_state_new(void)
 {
-    winhttp_transport_state_t *state = SENTRY_MAKE(winhttp_transport_state_t);
+    winhttp_bgworker_state_t *state = SENTRY_MAKE(winhttp_bgworker_state_t);
     if (!state) {
         return NULL;
     }
+    memset(state, 0, sizeof(winhttp_bgworker_state_t));
 
-    state->bgworker = sentry__bgworker_new();
-    if (!state->bgworker) {
-        sentry_free(state);
-        return NULL;
-    }
-
-    state->connect = NULL;
-    state->session = NULL;
-    state->user_agent = NULL;
-    state->proxy = NULL;
-    state->rl = sentry__rate_limiter_new();
+    state->ratelimiter = sentry__rate_limiter_new();
 
     return state;
 }
 
 static void
-winhttp_transport_start(sentry_transport_t *transport)
+sentry__winhttp_bgworker_state_free(void *_state)
 {
-    winhttp_transport_state_t *state = transport->data;
+    winhttp_bgworker_state_t *state = _state;
+    if (state->connect) {
+        WinHttpCloseHandle(state->connect);
+    }
+    if (state->session) {
+        WinHttpCloseHandle(state->session);
+    }
+    sentry__dsn_decref(state->dsn);
+    sentry__rate_limiter_free(state->ratelimiter);
+    sentry_free(state->user_agent);
+    sentry_free(state->proxy);
+    sentry_free(state);
+}
 
-    const sentry_options_t *opts = sentry_get_options();
+static int
+sentry__winhttp_transport_start(
+    const sentry_options_t *opts, void *transport_state)
+{
+    sentry_bgworker_t *bgworker = (sentry_bgworker_t *)transport_state;
+    winhttp_bgworker_state_t *state = sentry__bgworker_get_state(bgworker);
 
+    state->dsn = sentry__dsn_incref(opts->dsn);
     state->user_agent = sentry__string_to_wstr(SENTRY_SDK_USER_AGENT);
+    state->debug = opts->debug;
 
-    if (opts->http_proxy && strstr(opts->http_proxy, "http://") == 0) {
+    sentry__bgworker_setname(bgworker, opts->transport_thread_name);
+
+    // ensure the proxy starts with `http://`, otherwise ignore it
+    if (opts->http_proxy
+        && strstr(opts->http_proxy, "http://") == opts->http_proxy) {
         const char *ptr = opts->http_proxy + 7;
         const char *slash = strchr(ptr, '/');
         if (slash) {
@@ -87,44 +99,37 @@ winhttp_transport_start(sentry_transport_t *transport)
                 WINHTTP_NO_PROXY_BYPASS, 0);
         }
     }
+    if (!state->session) {
+        SENTRY_WARN("`WinHttpOpen` failed");
+        return 1;
+    }
+    return sentry__bgworker_start(bgworker);
+}
 
-    sentry__bgworker_start(state->bgworker);
+static int
+sentry__winhttp_transport_shutdown(uint64_t timeout, void *transport_state)
+{
+    sentry_bgworker_t *bgworker = (sentry_bgworker_t *)transport_state;
+    return sentry__bgworker_shutdown(bgworker, timeout);
 }
 
 static void
-winhttp_transport_shutdown(sentry_transport_t *transport)
+sentry__winhttp_send_task(void *_envelope, void *_state)
 {
-    winhttp_transport_state_t *state = transport->data;
-    sentry__bgworker_shutdown(state->bgworker, 5000);
-}
+    sentry_envelope_t *envelope = (sentry_envelope_t *)_envelope;
+    winhttp_bgworker_state_t *state = (winhttp_bgworker_state_t *)_state;
 
-static void
-winhttp_transport_free(sentry_transport_t *transport)
-{
-    winhttp_transport_state_t *state = transport->data;
-    sentry__bgworker_free(state->bgworker);
-    sentry__rate_limiter_free(state->rl);
-    WinHttpCloseHandle(state->connect);
-    WinHttpCloseHandle(state->session);
-    sentry_free(state->user_agent);
-    sentry_free(state->proxy);
-    sentry_free(state);
-}
+    uint64_t started = sentry__monotonic_time();
 
-static bool
-for_each_request_callback(sentry_prepared_http_request_t *req,
-    const sentry_envelope_t *envelope, void *data)
-{
-    struct task_state *ts = data;
-    winhttp_transport_state_t *state = ts->transport_state;
-    const sentry_options_t *opts = sentry_get_options();
-
-    if (!opts || opts->dsn.empty || sentry__should_skip_upload()) {
-        SENTRY_DEBUG("skipping event upload");
-        return false;
+    sentry_prepared_http_request_t *req = sentry__prepare_http_request(
+        envelope, state->dsn, state->ratelimiter);
+    if (!req) {
+        return;
     }
 
     wchar_t *url = sentry__string_to_wstr(req->url);
+    wchar_t *headers = NULL;
+    HINTERNET request = NULL;
 
     URL_COMPONENTS url_components;
     wchar_t hostname[128];
@@ -141,11 +146,20 @@ for_each_request_callback(sentry_prepared_http_request_t *req,
         state->connect = WinHttpConnect(state->session,
             url_components.lpszHostName, url_components.nPort, 0);
     }
+    if (!state->connect) {
+        SENTRY_WARNF("`WinHttpConnect` failed with code `%d`", GetLastError());
+        goto exit;
+    }
 
     bool is_secure = strstr(req->url, "https") == req->url;
-    HINTERNET request = WinHttpOpenRequest(state->connect, L"POST",
+    request = WinHttpOpenRequest(state->connect, L"POST",
         url_components.lpszUrlPath, NULL, WINHTTP_NO_REFERER,
         WINHTTP_DEFAULT_ACCEPT_TYPES, is_secure ? WINHTTP_FLAG_SECURE : 0);
+    if (!request) {
+        SENTRY_WARNF(
+            "`WinHttpOpenRequest` failed with code `%d`", GetLastError());
+        goto exit;
+    }
 
     sentry_stringbuilder_t sb;
     sentry__stringbuilder_init(&sb);
@@ -157,18 +171,18 @@ for_each_request_callback(sentry_prepared_http_request_t *req,
         sentry__stringbuilder_append(&sb, "\r\n");
     }
 
-    char *buf = sentry__stringbuilder_into_string(&sb);
-    wchar_t *headers = sentry__string_to_wstr(buf);
-    sentry_free(buf);
+    char *headers_buf = sentry__stringbuilder_into_string(&sb);
+    headers = sentry__string_to_wstr(headers_buf);
+    sentry_free(headers_buf);
 
     SENTRY_TRACEF(
-        "sending request using winhttp to %s:\n%S", req->url, headers);
+        "sending request using winhttp to \"%s\":\n%S", req->url, headers);
 
-    if (WinHttpSendRequest(request, headers, -1, (LPVOID)req->payload,
-            (DWORD)req->payload_len, (DWORD)req->payload_len, 0)) {
+    if (WinHttpSendRequest(request, headers, (DWORD)-1, (LPVOID)req->body,
+            (DWORD)req->body_len, (DWORD)req->body_len, 0)) {
         WinHttpReceiveResponse(request, NULL);
 
-        if (opts->debug) {
+        if (state->debug) {
             // this is basically the example from:
             // https://docs.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpqueryheaders#examples
             DWORD dwSize = 0;
@@ -202,8 +216,7 @@ for_each_request_callback(sentry_prepared_http_request_t *req,
                 WINHTTP_NO_HEADER_INDEX)) {
             char *h = sentry__string_from_wstr(buf);
             if (h) {
-                sentry__rate_limiter_update_from_header(
-                    ts->transport_state->rl, h);
+                sentry__rate_limiter_update_from_header(state->ratelimiter, h);
                 sentry_free(h);
             }
         } else if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM,
@@ -212,101 +225,81 @@ for_each_request_callback(sentry_prepared_http_request_t *req,
             char *h = sentry__string_from_wstr(buf);
             if (h) {
                 sentry__rate_limiter_update_from_http_retry_after(
-                    ts->transport_state->rl, h);
+                    state->ratelimiter, h);
                 sentry_free(h);
             }
         }
     } else {
-        SENTRY_DEBUGF("http request failed with error: %d", GetLastError());
+        SENTRY_DEBUGF(
+            "`WinHttpSendRequest` failed with code `%d`", GetLastError());
     }
-    WinHttpCloseHandle(request);
+
+    uint64_t now = sentry__monotonic_time();
+    SENTRY_TRACEF("request handled in %llums", now - started);
+
+exit:
+    if (request) {
+        WinHttpCloseHandle(request);
+    }
     sentry_free(url);
     sentry_free(headers);
-
     sentry__prepared_http_request_free(req);
+}
+
+static void
+sentry__winhttp_transport_send_envelope(
+    sentry_envelope_t *envelope, void *transport_state)
+{
+    sentry_bgworker_t *bgworker = (sentry_bgworker_t *)transport_state;
+    sentry__bgworker_submit(bgworker, sentry__winhttp_send_task,
+        (void (*)(void *))sentry_envelope_free, envelope);
+}
+
+static bool
+sentry__winhttp_dump_task(void *envelope, void *run)
+{
+    sentry__run_write_envelope(
+        (sentry_run_t *)run, (sentry_envelope_t *)envelope);
     return true;
 }
 
-static void
-task_exec_func(void *data)
+static size_t
+sentry__winhttp_dump_queue(sentry_run_t *run, void *transport_state)
 {
-    struct task_state *ts = data;
-    sentry__envelope_for_each_request(
-        ts->envelope, for_each_request_callback, ts->transport_state->rl, data);
-}
-
-static void
-task_cleanup_func(void *data)
-{
-    struct task_state *ts = data;
-    sentry_envelope_free(ts->envelope);
-    sentry_free(ts);
-}
-
-static void
-winhttp_transport_send_envelope(
-    struct sentry_transport_s *transport, sentry_envelope_t *envelope)
-{
-    winhttp_transport_state_t *state = transport->data;
-    struct task_state *ts = SENTRY_MAKE(struct task_state);
-    if (!ts) {
-        sentry_envelope_free(envelope);
-        return;
-    }
-    ts->transport_state = state;
-    ts->envelope = envelope;
-    sentry__bgworker_submit(
-        state->bgworker, task_exec_func, task_cleanup_func, ts);
+    sentry_bgworker_t *bgworker = (sentry_bgworker_t *)transport_state;
+    return sentry__bgworker_foreach_matching(
+        bgworker, sentry__winhttp_send_task, sentry__winhttp_dump_task, run);
 }
 
 sentry_transport_t *
 sentry__transport_new_default(void)
 {
     SENTRY_DEBUG("initializing winhttp transport");
-    sentry_transport_t *transport = SENTRY_MAKE(sentry_transport_t);
-    if (!transport) {
-        return NULL;
-    }
-
-    winhttp_transport_state_t *state = new_transport_state();
+    winhttp_bgworker_state_t *state = sentry__winhttp_bgworker_state_new();
     if (!state) {
-        sentry_free(transport);
         return NULL;
-    }
-
-    transport->data = state;
-    transport->free_func = winhttp_transport_free;
-    transport->send_envelope_func = winhttp_transport_send_envelope;
-    transport->startup_func = winhttp_transport_start;
-    transport->shutdown_func = winhttp_transport_shutdown;
-
-    return transport;
-}
-
-static bool
-sentry__winhttp_dump(void *task_data, void *UNUSED(data))
-{
-    struct task_state *ts = task_data;
-    const sentry_options_t *opts = sentry_get_options();
-
-    sentry__run_write_envelope(opts->run, ts->envelope);
-
-    return true;
-}
-
-void
-sentry__transport_dump_queue(sentry_transport_t *transport)
-{
-    // make sure to only dump when it is actually *this* transport which is in
-    // use
-    if (transport->send_envelope_func != winhttp_transport_send_envelope) {
-        return;
     }
 
     sentry_bgworker_t *bgworker
-        = ((winhttp_transport_state_t *)transport->data)->bgworker;
+        = sentry__bgworker_new(state, sentry__winhttp_bgworker_state_free);
+    if (!bgworker) {
+        return NULL;
+    }
 
-    size_t dumped = sentry__bgworker_foreach_matching(
-        bgworker, task_exec_func, sentry__winhttp_dump, NULL);
-    SENTRY_TRACEF("dumped %zu in-flight envelopes to disk", dumped);
+    sentry_transport_t *transport
+        = sentry_transport_new(sentry__winhttp_transport_send_envelope);
+    if (!transport) {
+        sentry__bgworker_decref(bgworker);
+        return NULL;
+    }
+    sentry_transport_set_state(transport, bgworker);
+    sentry_transport_set_free_func(
+        transport, (void (*)(void *))sentry__bgworker_decref);
+    sentry_transport_set_startup_func(
+        transport, sentry__winhttp_transport_start);
+    sentry_transport_set_shutdown_func(
+        transport, sentry__winhttp_transport_shutdown);
+    sentry__transport_set_dump_func(transport, sentry__winhttp_dump_queue);
+
+    return transport;
 }

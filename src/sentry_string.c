@@ -17,7 +17,7 @@ static int
 append(sentry_stringbuilder_t *sb, const char *s, size_t len)
 {
     size_t needed = sb->len + len + 1;
-    if (needed > sb->allocated) {
+    if (!sb->buf || needed > sb->allocated) {
         size_t new_alloc_size = sb->allocated;
         if (new_alloc_size == 0) {
             new_alloc_size = INITIAL_BUFFER_SIZE;
@@ -41,6 +41,7 @@ append(sentry_stringbuilder_t *sb, const char *s, size_t len)
 
     // make sure we're always zero terminated
     sb->buf[sb->len] = '\0';
+
     return 0;
 }
 
@@ -126,6 +127,9 @@ sentry__string_clonen(const char *str, size_t n)
 char *
 sentry__string_from_wstr(const wchar_t *s)
 {
+    if (!s) {
+        return NULL;
+    }
     int len = WideCharToMultiByte(CP_UTF8, 0, s, -1, NULL, 0, NULL, NULL);
     char *rv = sentry_malloc(len);
     if (rv) {
@@ -149,8 +153,8 @@ sentry__string_to_wstr(const char *s)
 size_t
 sentry__unichar_to_utf8(uint32_t c, char *buf)
 {
-    size_t i, len;
-    int first;
+    size_t i, len = 1;
+    uint32_t first;
 
     if (c < 0x80) {
         first = 0;
@@ -169,9 +173,9 @@ sentry__unichar_to_utf8(uint32_t c, char *buf)
     }
 
     for (i = len - 1; i > 0; --i) {
-        buf[i] = (c & 0x3f) | 0x80;
+        buf[i] = (char)(c & 0x3f) | 0x80;
         c >>= 6;
     }
-    buf[0] = c | first;
+    buf[0] = (char)(c | first);
     return len;
 }

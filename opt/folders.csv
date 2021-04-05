@@ -2,6 +2,7 @@
 include,include,,h,
 src,src,,"h,c",
 src/backends,src/backends,,"c,cpp",
+src/integrations,src/integrations,,"h,cpp",
 src/modulefinder,src/modulefinder,,"h,c",
 src/path,src/path,,c,
 src/symbolizer,src/symbolizer,,c,

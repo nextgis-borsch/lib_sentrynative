@@ -2,6 +2,7 @@
 #include "sentry_alloc.h"
 #include "sentry_envelope.h"
 #include "sentry_json.h"
+#include "sentry_options.h"
 #include "sentry_session.h"
 #include <string.h>
 
@@ -130,15 +131,12 @@ sentry__run_write_session(
 bool
 sentry__run_clear_session(const sentry_run_t *run)
 {
-    if(!run) {
-        return true;
-    }
     int rv = sentry__path_remove(run->session_path);
     return !rv;
 }
 
 void
-sentry__process_old_runs(const sentry_options_t *options)
+sentry__process_old_runs(const sentry_options_t *options, uint64_t last_crash)
 {
     sentry_pathiter_t *db_iter
         = sentry__path_iter_directory(options->database_path);
@@ -157,29 +155,12 @@ sentry__process_old_runs(const sentry_options_t *options)
             continue;
         }
 
-        sentry_stringbuilder_t sb;
-        sentry__stringbuilder_init(&sb);
-        const sentry_pathchar_t *filename = sentry__path_filename(run_dir);
-#ifdef SENTRY_PLATFORM_WINDOWS
-        char *filename_c = sentry__string_from_wstr(filename);
-        if (filename_c) {
-            sentry__stringbuilder_append(&sb, filename_c);
-            sentry_free(filename_c);
-        }
-#else
-        sentry__stringbuilder_append(&sb, filename);
-#endif
-        // `<db>/<uuid>.run.lock`
-        sentry__stringbuilder_append(&sb, ".lock");
-        char *lockfile_s = sentry__stringbuilder_into_string(&sb);
-        if (!lockfile_s) {
+        sentry_path_t *lockfile = sentry__path_append_str(run_dir, ".lock");
+        if (!lockfile) {
             continue;
         }
-        sentry_path_t *lockfile
-            = sentry__path_join_str(options->database_path, lockfile_s);
-        sentry_free(lockfile_s);
-        sentry_filelock_t *lock;
-        if (!lockfile || !(lock = sentry__filelock_new(lockfile))) {
+        sentry_filelock_t *lock = sentry__filelock_new(lockfile);
+        if (!lock) {
             continue;
         }
         bool did_lock = sentry__filelock_try_lock(lock);
@@ -191,29 +172,47 @@ sentry__process_old_runs(const sentry_options_t *options)
         sentry_pathiter_t *run_iter = sentry__path_iter_directory(run_dir);
         const sentry_path_t *file;
         while ((file = sentry__pathiter_next(run_iter)) != NULL) {
-            if (options->transport) {
-                if (sentry__path_filename_matches(file, "session.json")) {
-                    if (!session_envelope) {
-                        session_envelope = sentry__envelope_new();
-                    }
-                    sentry_session_t *session = sentry__session_from_path(file);
+            if (sentry__path_filename_matches(file, "session.json")) {
+                if (!session_envelope) {
+                    session_envelope = sentry__envelope_new();
+                }
+                sentry_session_t *session = sentry__session_from_path(file);
+                if (session) {
+                    // this is just a heuristic: whenever the session was not
+                    // closed properly, and we do have a crash that happened
+                    // *after* the session was started, we will assume that the
+                    // crash corresponds to the session and flag it as crashed.
+                    // this should only happen when using crashpad, and there
+                    // should normally be only a single unclosed session at a
+                    // time.
                     if (session->status == SENTRY_SESSION_STATUS_OK) {
-                        session->status = SENTRY_SESSION_STATUS_ABNORMAL;
+                        bool was_crash
+                            = last_crash && last_crash > session->started_ms;
+                        if (was_crash) {
+                            session->duration_ms
+                                = last_crash - session->started_ms;
+                            session->errors += 1;
+                            // we only set at most one unclosed session as
+                            // crashed
+                            last_crash = 0;
+                        }
+                        session->status = was_crash
+                            ? SENTRY_SESSION_STATUS_CRASHED
+                            : SENTRY_SESSION_STATUS_ABNORMAL;
                     }
                     sentry__envelope_add_session(session_envelope, session);
+
                     sentry__session_free(session);
                     if ((++session_num) >= SENTRY_MAX_ENVELOPE_ITEMS) {
-                        sentry__capture_envelope(session_envelope);
+                        sentry__capture_envelope(
+                            options->transport, session_envelope);
                         session_envelope = NULL;
                         session_num = 0;
                     }
-                } else if (sentry__path_ends_with(file, ".envelope")) {
-                    sentry_envelope_t *envelope
-                        = sentry__envelope_from_path(file);
-                    if (envelope) {
-                        sentry__capture_envelope(envelope);
-                    }
                 }
+            } else if (sentry__path_ends_with(file, ".envelope")) {
+                sentry_envelope_t *envelope = sentry__envelope_from_path(file);
+                sentry__capture_envelope(options->transport, envelope);
             }
 
             sentry__path_remove(file);
@@ -225,9 +224,7 @@ sentry__process_old_runs(const sentry_options_t *options)
     }
     sentry__pathiter_free(db_iter);
 
-    if (session_envelope) {
-        sentry__capture_envelope(session_envelope);
-    }
+    sentry__capture_envelope(options->transport, session_envelope);
 }
 
 bool

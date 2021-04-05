@@ -7,6 +7,7 @@
 #    include <winnt.h>
 #else
 #    include <sys/time.h>
+#    include <time.h>
 #endif
 
 /**
@@ -38,28 +39,36 @@ void sentry__url_cleanup(sentry_url_t *url);
 /**
  * This is the internal representation of a parsed DSN.
  */
-typedef struct {
-    bool is_secure;
+typedef struct sentry_dsn_s {
+    char *raw;
     char *host;
-    int port;
+    char *path;
     char *secret_key;
     char *public_key;
     uint64_t project_id;
-    char *path;
-    bool empty;
+    int port;
+    long refcount;
+    bool is_valid;
+    bool is_secure;
 } sentry_dsn_t;
 
 /**
- * This will parse the DSN URL given in `dsn` into the pre-allocated `dsn_out`.
- * Returns 0 on success.
+ * This will parse the DSN URL given in `dsn`.
+ *
+ * The returned `sentry_dsn_t` will have have its `is_valid` flag set when the
+ * DSN has been successfully parsed.
  */
-int sentry__dsn_parse(sentry_dsn_t *dsn_out, const char *dsn);
+sentry_dsn_t *sentry__dsn_new(const char *dsn);
 
 /**
- * This will free all the internal members of `dsn`, but not `dsn` itself, as
- * that might have been stack allocated.
+ * Increases the reference-count of the DSN.
  */
-void sentry__dsn_cleanup(sentry_dsn_t *dsn);
+sentry_dsn_t *sentry__dsn_incref(sentry_dsn_t *dsn);
+
+/**
+ * Decrements the reference-count of the DSN.
+ */
+void sentry__dsn_decref(sentry_dsn_t *dsn);
 
 /**
  * This will create a new string, with the contents of the `X-Sentry-Auth`, as
@@ -69,25 +78,16 @@ void sentry__dsn_cleanup(sentry_dsn_t *dsn);
 char *sentry__dsn_get_auth_header(const sentry_dsn_t *dsn);
 
 /**
- * Returns a new string with the URL for normal event uploads.
- */
-char *sentry__dsn_get_store_url(const sentry_dsn_t *dsn);
-
-/**
- * Returns a new string with the URL for envelope uploads.
+ * Returns the envelope endpoint url used for normal uploads as a newly
+ * allocated string.
  */
 char *sentry__dsn_get_envelope_url(const sentry_dsn_t *dsn);
 
 /**
- * Returns a new string with the URL for minidump uploads.
+ * Returns the minidump endpoint url used for uploads done by the out-of-process
+ * crashpad backend as a newly allocated string.
  */
 char *sentry__dsn_get_minidump_url(const sentry_dsn_t *dsn);
-
-/**
- * Returns a new string with the URL for attachment uploads.
- */
-char *sentry__dsn_get_attachment_url(
-    const sentry_dsn_t *dsn, const sentry_uuid_t *event_id);
 
 /**
  * Returns the number of milliseconds since the unix epoch.
@@ -118,6 +118,42 @@ sentry__msec_time(void)
 }
 
 /**
+ * Returns a monotonic millisecond resolution time.
+ *
+ * This should be used for timeouts and similar.
+ * For timestamps, use `sentry__msec_time` instead.
+ */
+static inline uint64_t
+sentry__monotonic_time(void)
+{
+#ifdef SENTRY_PLATFORM_WINDOWS
+    static LARGE_INTEGER qpc_frequency = { { 0, 0 } };
+
+    if (!qpc_frequency.QuadPart) {
+        QueryPerformanceFrequency(&qpc_frequency);
+    }
+
+    // Fallback to GetTickCount() on QPC fail
+    if (!qpc_frequency.QuadPart) {
+#    if _WIN32_WINNT >= 0x0600
+        return GetTickCount64();
+#    else
+        return GetTickCount();
+#    endif
+    }
+
+    LARGE_INTEGER qpc_counter;
+    QueryPerformanceCounter(&qpc_counter);
+    return qpc_counter.QuadPart * 1000 / qpc_frequency.QuadPart;
+#else
+    struct timespec tv;
+    return (clock_gettime(CLOCK_MONOTONIC, &tv) == 0)
+        ? (uint64_t)tv.tv_sec * 1000 + tv.tv_nsec / 1000000
+        : 0;
+#endif
+}
+
+/**
  * Formats a timestamp (milliseconds since epoch) into ISO8601 format.
  */
 char *sentry__msec_time_to_iso8601(uint64_t time);
@@ -128,5 +164,15 @@ char *sentry__msec_time_to_iso8601(uint64_t time);
  * produced by the `sentry__msec_time_to_iso8601` function.
  */
 uint64_t sentry__iso8601_to_msec(const char *iso);
+
+/**
+ * Locale independent (or rather, using "C" locale) `strtod`.
+ */
+double sentry__strtod_c(const char *ptr, char **endptr);
+
+/**
+ * Locale independent (or rather, using "C" locale) `snprintf`.
+ */
+int sentry__snprintf_c(char *buf, size_t buf_size, const char *fmt, ...);
 
 #endif

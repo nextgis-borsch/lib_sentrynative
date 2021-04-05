@@ -2,6 +2,7 @@
 #include "sentry_alloc.h"
 #include "sentry_envelope.h"
 #include "sentry_json.h"
+#include "sentry_options.h"
 #include "sentry_scope.h"
 #include "sentry_string.h"
 #include "sentry_utils.h"
@@ -47,7 +48,28 @@ status_from_string(const char *status)
 sentry_session_t *
 sentry__session_new(void)
 {
+    char *release = NULL;
+    char *environment = NULL;
+    SENTRY_WITH_OPTIONS (options) {
+        release = sentry__string_clone(sentry_options_get_release(options));
+        environment
+            = sentry__string_clone(sentry_options_get_environment(options));
+    }
+
+    if (!release) {
+        sentry_free(environment);
+        return NULL;
+    }
+
     sentry_session_t *rv = SENTRY_MAKE(sentry_session_t);
+    if (!rv) {
+        sentry_free(release);
+        sentry_free(environment);
+        return NULL;
+    }
+
+    rv->release = release;
+    rv->environment = environment;
     rv->session_id = sentry_uuid_new_v4();
     rv->distinct_id = sentry_value_new_null();
     rv->status = SENTRY_SESSION_STATUS_OK;
@@ -66,6 +88,8 @@ sentry__session_free(sentry_session_t *session)
         return;
     }
     sentry_value_decref(session->distinct_id);
+    sentry_free(session->release);
+    sentry_free(session->environment);
     sentry_free(session);
 }
 
@@ -73,8 +97,6 @@ void
 sentry__session_to_json(
     const sentry_session_t *session, sentry_jsonwriter_t *jw)
 {
-    const sentry_options_t *opts = sentry_get_options();
-
     sentry__jsonwriter_write_object_start(jw);
     if (session->init) {
         sentry__jsonwriter_write_key(jw, "init");
@@ -113,9 +135,9 @@ sentry__session_to_json(
     sentry__jsonwriter_write_key(jw, "attrs");
     sentry__jsonwriter_write_object_start(jw);
     sentry__jsonwriter_write_key(jw, "release");
-    sentry__jsonwriter_write_str(jw, sentry_options_get_release(opts));
+    sentry__jsonwriter_write_str(jw, session->release);
     sentry__jsonwriter_write_key(jw, "environment");
-    sentry__jsonwriter_write_str(jw, sentry_options_get_environment(opts));
+    sentry__jsonwriter_write_str(jw, session->environment);
     sentry__jsonwriter_write_object_end(jw);
 
     sentry__jsonwriter_write_object_end(jw);
@@ -129,8 +151,19 @@ sentry__session_from_json(const char *buf, size_t buflen)
         return NULL;
     }
 
+    sentry_value_t attrs = sentry_value_get_by_key(value, "attrs");
+    if (sentry_value_is_null(attrs)) {
+        return NULL;
+    }
+    char *release = sentry__string_clone(
+        sentry_value_as_string(sentry_value_get_by_key(attrs, "release")));
+    if (!release) {
+        return NULL;
+    }
+
     sentry_session_t *rv = SENTRY_MAKE(sentry_session_t);
     if (!rv) {
+        sentry_free(release);
         return NULL;
     }
     rv->session_id
@@ -138,11 +171,16 @@ sentry__session_from_json(const char *buf, size_t buflen)
 
     rv->distinct_id = sentry_value_get_by_key_owned(value, "did");
 
+    rv->release = release;
+    rv->environment = sentry__string_clone(
+        sentry_value_as_string(sentry_value_get_by_key(attrs, "environment")));
+
     const char *status
         = sentry_value_as_string(sentry_value_get_by_key(value, "status"));
     rv->status = status_from_string(status);
 
     rv->init = sentry_value_is_true(sentry_value_get_by_key(value, "init"));
+
     rv->errors = (int64_t)sentry_value_as_int32(
         sentry_value_get_by_key(value, "errors"));
     rv->started_ms = sentry__iso8601_to_msec(
@@ -181,17 +219,6 @@ sentry_start_session(void)
 }
 
 void
-sentry__end_current_session_with_status(sentry_session_status_t status)
-{
-    SENTRY_WITH_SCOPE_MUT (scope) {
-        if (scope->session) {
-            scope->session->status = status;
-        }
-    }
-    sentry_end_session();
-}
-
-void
 sentry__record_errors_on_current_session(uint32_t error_count)
 {
     SENTRY_WITH_SCOPE_MUT (scope) {
@@ -201,25 +228,45 @@ sentry__record_errors_on_current_session(uint32_t error_count)
     }
 }
 
+static sentry_session_t *
+sentry__end_session_internal(void)
+{
+    sentry_session_t *session = NULL;
+    SENTRY_WITH_SCOPE_MUT (scope) {
+        session = scope->session;
+        scope->session = NULL;
+    }
+
+    if (session && session->status == SENTRY_SESSION_STATUS_OK) {
+        session->status = SENTRY_SESSION_STATUS_EXITED;
+    }
+    return session;
+}
+
+sentry_session_t *
+sentry__end_current_session_with_status(sentry_session_status_t status)
+{
+    sentry_session_t *session = sentry__end_session_internal();
+    if (session) {
+        session->status = status;
+    }
+    return session;
+}
+
 void
 sentry_end_session(void)
 {
-    sentry_envelope_t *envelope = NULL;
-
-    SENTRY_WITH_SCOPE_MUT (scope) {
-        if (scope->session) {
-            if (scope->session->status == SENTRY_SESSION_STATUS_OK) {
-                scope->session->status = SENTRY_SESSION_STATUS_EXITED;
-            }
-            envelope = sentry__envelope_new();
-            sentry__envelope_add_session(envelope, scope->session);
-            sentry__session_free(scope->session);
-            scope->session = NULL;
-        }
+    sentry_session_t *session = sentry__end_session_internal();
+    if (!session) {
+        return;
     }
 
-    if (envelope) {
-        sentry__capture_envelope(envelope);
+    sentry_envelope_t *envelope = sentry__envelope_new();
+    sentry__envelope_add_session(envelope, session);
+    sentry__session_free(session);
+
+    SENTRY_WITH_OPTIONS (options) {
+        sentry__capture_envelope(options->transport, envelope);
     }
 }
 

@@ -20,7 +20,7 @@
 
 static bool g_initialized = false;
 static sentry_mutex_t g_mutex = SENTRY__MUTEX_INIT;
-static sentry_value_t g_modules;
+static sentry_value_t g_modules = { 0 };
 
 static sentry_slice_t LINUX_GATE = { "linux-gate.so", 13 };
 
@@ -284,7 +284,7 @@ sentry__procmaps_read_ids_from_elf(sentry_value_t value, void *elf_ptr)
         sentry_value_set_by_key(value, "code_id",
             sentry__value_new_hexstring(code_id, code_id_size));
 
-        uuid = sentry_uuid_from_bytes((const char *)code_id);
+        memcpy(uuid.bytes, code_id, MIN(code_id_size, 16));
     } else {
         uuid = get_code_id_from_text_fallback(elf_ptr);
     }
@@ -310,8 +310,8 @@ sentry__procmaps_module_to_value(const sentry_module_t *module)
 {
     sentry_value_t mod_val = sentry_value_new_object();
     sentry_value_set_by_key(mod_val, "type", sentry_value_new_string("elf"));
-    sentry_value_set_by_key(
-        mod_val, "image_addr", sentry__value_new_addr((uint64_t)module->start));
+    sentry_value_set_by_key(mod_val, "image_addr",
+        sentry__value_new_addr((uint64_t)(size_t)module->start));
     sentry_value_set_by_key(mod_val, "image_size",
         sentry_value_new_int32(
             (int32_t)((size_t)module->end - (size_t)module->start)));
@@ -427,6 +427,7 @@ load_modules(sentry_value_t modules)
             break;
         }
         if (sentry__stringbuilder_append_buf(&sb, buf, n)) {
+            sentry__stringbuilder_cleanup(&sb);
             close(fd);
             return;
         }
@@ -485,7 +486,7 @@ load_modules(sentry_value_t modules)
 }
 
 sentry_value_t
-sentry__modules_get_list(void)
+sentry_get_modules_list(void)
 {
     sentry__mutex_lock(&g_mutex);
     if (!g_initialized) {
@@ -497,12 +498,14 @@ sentry__modules_get_list(void)
         sentry_value_freeze(g_modules);
         g_initialized = true;
     }
+    sentry_value_t modules = g_modules;
+    sentry_value_incref(modules);
     sentry__mutex_unlock(&g_mutex);
-    return g_modules;
+    return modules;
 }
 
 void
-sentry__modulefinder_cleanup(void)
+sentry_clear_modulecache(void)
 {
     sentry__mutex_lock(&g_mutex);
     sentry_value_decref(g_modules);

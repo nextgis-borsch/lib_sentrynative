@@ -28,6 +28,13 @@ typedef struct sentry_pathiter_s sentry_pathiter_t;
 typedef struct sentry_filelock_s sentry_filelock_t;
 
 /**
+ * NOTE on encodings:
+ *
+ * When not stated otherwise, all `char` functions defined here will assume an
+ * OS-specific encoding, typically ANSI on Windows, and UTF-8 on Unix.
+ */
+
+/**
  * Creates a new path by making `path` into an absolute path.
  */
 sentry_path_t *sentry__path_absolute(const sentry_path_t *path);
@@ -60,6 +67,14 @@ sentry_path_t *sentry__path_join_str(
     const sentry_path_t *base, const char *other);
 
 /**
+ * Return a new path with the given suffix appended.
+ * This is different to `sentry__path_join_str` as it does not create a new path
+ * segment.
+ */
+sentry_path_t *sentry__path_append_str(
+    const sentry_path_t *base, const char *suffix);
+
+/**
  * Creates a copy of the path.
  */
 sentry_path_t *sentry__path_clone(const sentry_path_t *path);
@@ -70,8 +85,8 @@ sentry_path_t *sentry__path_clone(const sentry_path_t *path);
 void sentry__path_free(sentry_path_t *path);
 
 /**
- * This will return a copy of the last path segment, which is typically the file
- * or directory name.
+ * This will return a pointer to the last path segment, which is typically the
+ * file or directory name
  */
 const sentry_pathchar_t *sentry__path_filename(const sentry_path_t *path);
 
@@ -202,7 +217,7 @@ sentry_path_t *sentry__path_join_wstr(
  * Create a new path from the platform native string type.
  */
 static inline sentry_path_t *
-sentry__path_new(sentry_pathchar_t *s)
+sentry__path_new(const sentry_pathchar_t *s)
 {
 #ifdef SENTRY_PLATFORM_WINDOWS
     return sentry__path_from_wstr(s);

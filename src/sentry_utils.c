@@ -1,11 +1,25 @@
+// According to http://lua-users.org/lists/lua-l/2016-04/msg00216.html we can
+// use `stdtod_l` on all platforms when defining `_GNU_SOURCE`.
+
+#define _GNU_SOURCE
+
 #include "sentry_utils.h"
 #include "sentry_alloc.h"
 #include "sentry_core.h"
 #include "sentry_string.h"
+#include "sentry_sync.h"
+#include <locale.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#ifdef SENTRY_PLATFORM_MACOS
+#    include <xlocale.h>
+#elif defined(SENTRY_PLATFORM_LINUX) && !defined(SENTRY_PLATFORM_ANDROID)
+#    include "../vendor/stb_sprintf.h"
+#endif
 
 static bool
 is_scheme_valid(const char *scheme_name)
@@ -52,7 +66,7 @@ sentry__url_parse(sentry_url_t *url_out, const char *url)
     }
     url_out->scheme = sentry__string_clonen(ptr, tmp - ptr);
 
-    if (!is_scheme_valid(url_out->scheme)) {
+    if (!url_out->scheme || !is_scheme_valid(url_out->scheme)) {
         goto error;
     }
     sentry__string_ascii_lower(url_out->scheme);
@@ -122,7 +136,7 @@ sentry__url_parse(sentry_url_t *url_out, const char *url)
         SKIP_WHILE_NOT(tmp, '/');
         aux_buf = sentry__string_clonen(ptr, tmp - ptr);
         char *end;
-        url_out->port = strtol(aux_buf, &end, 10);
+        url_out->port = (int)strtol(aux_buf, &end, 10);
         if (end != aux_buf + strlen(aux_buf)) {
             goto error;
         }
@@ -161,7 +175,6 @@ sentry__url_parse(sentry_url_t *url_out, const char *url)
         tmp = ptr;
         SKIP_WHILE_NOT(tmp, 0);
         url_out->fragment = sentry__string_clonen(ptr, tmp - ptr);
-        ptr = tmp;
     }
 
     if (url_out->port == 0) {
@@ -198,40 +211,42 @@ sentry__url_cleanup(sentry_url_t *url)
     sentry_free(url->password);
 }
 
-int
-sentry__dsn_parse(sentry_dsn_t *dsn_out, const char *dsn)
+sentry_dsn_t *
+sentry__dsn_new(const char *raw_dsn)
 {
     sentry_url_t url;
+    memset(&url, 0, sizeof(sentry_url_t));
     size_t path_len;
     char *tmp;
     char *end;
 
-    memset(dsn_out, 0, sizeof(sentry_dsn_t));
-
-    if (!dsn || !dsn[0]) {
-        dsn_out->empty = true;
-        return 0;
+    sentry_dsn_t *dsn = SENTRY_MAKE(sentry_dsn_t);
+    if (!dsn) {
+        return NULL;
     }
+    memset(dsn, 0, sizeof(sentry_dsn_t));
+    dsn->refcount = 1;
 
-    if (sentry__url_parse(&url, dsn) != 0) {
-        return 1;
+    dsn->raw = sentry__string_clone(raw_dsn);
+    if (!dsn->raw || !dsn->raw[0] || sentry__url_parse(&url, dsn->raw) != 0) {
+        goto exit;
     }
 
     if (sentry__string_eq(url.scheme, "https")) {
-        dsn_out->is_secure = 1;
+        dsn->is_secure = 1;
     } else if (sentry__string_eq(url.scheme, "http")) {
-        dsn_out->is_secure = 0;
+        dsn->is_secure = 0;
     } else {
-        goto error;
+        goto exit;
     }
 
-    dsn_out->host = url.host;
+    dsn->host = url.host;
     url.host = NULL;
-    dsn_out->public_key = url.username;
+    dsn->public_key = url.username;
     url.username = NULL;
-    dsn_out->secret_key = url.password;
+    dsn->secret_key = url.password;
     url.password = NULL;
-    dsn_out->port = url.port;
+    dsn->port = url.port;
 
     path_len = strlen(url.path);
     while (path_len > 0 && url.path[path_len - 1] == '/') {
@@ -241,48 +256,61 @@ sentry__dsn_parse(sentry_dsn_t *dsn_out, const char *dsn)
 
     tmp = strrchr(url.path, '/');
     if (!tmp) {
-        goto error;
+        goto exit;
     }
 
-    dsn_out->project_id = (uint64_t)strtoll(tmp + 1, &end, 10);
+    dsn->project_id = (uint64_t)strtoll(tmp + 1, &end, 10);
     if (end != tmp + strlen(tmp)) {
-        goto error;
+        goto exit;
     }
     *tmp = 0;
-    dsn_out->path = url.path;
+    dsn->path = url.path;
     url.path = NULL;
-    dsn_out->empty = false;
+    dsn->is_valid = true;
 
+exit:
     sentry__url_cleanup(&url);
-    return 0;
+    return dsn;
+}
 
-error:
-    sentry__url_cleanup(&url);
-    sentry__dsn_cleanup(dsn_out);
-    return 1;
+sentry_dsn_t *
+sentry__dsn_incref(sentry_dsn_t *dsn)
+{
+    if (!dsn) {
+        return NULL;
+    }
+    sentry__atomic_fetch_and_add(&dsn->refcount, 1);
+    return dsn;
 }
 
 void
-sentry__dsn_cleanup(sentry_dsn_t *dsn)
+sentry__dsn_decref(sentry_dsn_t *dsn)
 {
-    sentry_free(dsn->host);
-    sentry_free(dsn->path);
-    sentry_free(dsn->public_key);
-    sentry_free(dsn->secret_key);
+    if (!dsn) {
+        return;
+    }
+    if (sentry__atomic_fetch_and_add(&dsn->refcount, -1) == 1) {
+        sentry_free(dsn->raw);
+        sentry_free(dsn->host);
+        sentry_free(dsn->path);
+        sentry_free(dsn->public_key);
+        sentry_free(dsn->secret_key);
+        sentry_free(dsn);
+    }
 }
 
 char *
 sentry__dsn_get_auth_header(const sentry_dsn_t *dsn)
 {
-    if (!dsn || dsn->empty) {
+    if (!dsn || !dsn->is_valid) {
         return NULL;
     }
     sentry_stringbuilder_t sb;
     sentry__stringbuilder_init(&sb);
     sentry__stringbuilder_append(&sb, "Sentry sentry_key=");
     sentry__stringbuilder_append(&sb, dsn->public_key);
-    sentry__stringbuilder_append(&sb, ", sentry_version=7, sentry_client=");
-    sentry__stringbuilder_append(&sb, SENTRY_SDK_USER_AGENT);
+    sentry__stringbuilder_append(
+        &sb, ", sentry_version=7, sentry_client=" SENTRY_SDK_USER_AGENT);
     return sentry__stringbuilder_into_string(&sb);
 }
 
@@ -301,21 +329,9 @@ init_string_builder_for_url(sentry_stringbuilder_t *sb, const sentry_dsn_t *dsn)
 }
 
 char *
-sentry__dsn_get_store_url(const sentry_dsn_t *dsn)
-{
-    if (!dsn || dsn->empty) {
-        return NULL;
-    }
-    sentry_stringbuilder_t sb;
-    init_string_builder_for_url(&sb, dsn);
-    sentry__stringbuilder_append(&sb, "/store/");
-    return sentry__stringbuilder_into_string(&sb);
-}
-
-char *
 sentry__dsn_get_envelope_url(const sentry_dsn_t *dsn)
 {
-    if (!dsn || dsn->empty) {
+    if (!dsn || !dsn->is_valid) {
         return NULL;
     }
     sentry_stringbuilder_t sb;
@@ -327,30 +343,14 @@ sentry__dsn_get_envelope_url(const sentry_dsn_t *dsn)
 char *
 sentry__dsn_get_minidump_url(const sentry_dsn_t *dsn)
 {
-    if (!dsn || dsn->empty) {
+    if (!dsn || !dsn->is_valid) {
         return NULL;
     }
     sentry_stringbuilder_t sb;
     init_string_builder_for_url(&sb, dsn);
-    sentry__stringbuilder_append(&sb, "/minidump/?sentry_key=");
+    sentry__stringbuilder_append(
+        &sb, "/minidump/?sentry_client=" SENTRY_SDK_USER_AGENT "&sentry_key=");
     sentry__stringbuilder_append(&sb, dsn->public_key);
-    return sentry__stringbuilder_into_string(&sb);
-}
-
-char *
-sentry__dsn_get_attachment_url(
-    const sentry_dsn_t *dsn, const sentry_uuid_t *event_id)
-{
-    if (!dsn || dsn->empty) {
-        return NULL;
-    }
-    sentry_stringbuilder_t sb;
-    char event_id_buf[37];
-    sentry_uuid_as_string(event_id, event_id_buf);
-    init_string_builder_for_url(&sb, dsn);
-    sentry__stringbuilder_append(&sb, "/events/");
-    sentry__stringbuilder_append(&sb, event_id_buf);
-    sentry__stringbuilder_append(&sb, "/attachments/");
     return sentry__stringbuilder_into_string(&sb);
 }
 
@@ -366,7 +366,7 @@ sentry__msec_time_to_iso8601(uint64_t time)
     struct tm tm_buf;
     tm = gmtime_r(&secs, &tm_buf);
 #endif
-    size_t end = strftime(buf, sizeof buf, "%FT%T", tm);
+    size_t end = strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%S", tm);
 
     int msecs = time % 1000;
     if (msecs) {
@@ -380,7 +380,7 @@ sentry__msec_time_to_iso8601(uint64_t time)
 uint64_t
 sentry__iso8601_to_msec(const char *iso)
 {
-    int len = strlen(iso);
+    size_t len = strlen(iso);
     if (len != 20 && len != 24) {
         return 0;
     }
@@ -422,4 +422,64 @@ sentry__iso8601_to_msec(const char *iso)
     }
 
     return (uint64_t)time * 1000 + msec;
+}
+
+#ifdef SENTRY_PLATFORM_WINDOWS
+#    define sentry__locale_t _locale_t
+#else
+#    define sentry__locale_t locale_t
+#endif
+
+// On NDK locales are not supported.  It defines `stdtod_l` as a function that
+// forwards to `stdtod`, but it does not define `vsnprintf_l` sadly.  This means
+// if Android ever adds locale support in NDK we will have to revisit this code
+// to ensure the C locale is also used there.
+#if !defined(SENTRY_PLATFORM_ANDROID) && !defined(SENTRY_PLATFORM_IOS)
+static sentry__locale_t
+c_locale()
+{
+    static long c_locale_initialized = 0;
+    static sentry__locale_t c_locale;
+    if (sentry__atomic_store(&c_locale_initialized, 1) == 0) {
+#    ifdef SENTRY_PLATFORM_WINDOWS
+        c_locale = _create_locale(LC_ALL, "C");
+#    else
+        c_locale = newlocale(LC_ALL_MASK, "C", (sentry__locale_t)0);
+#    endif
+    }
+    return c_locale;
+}
+#endif
+
+double
+sentry__strtod_c(const char *ptr, char **endptr)
+{
+#ifdef SENTRY_PLATFORM_WINDOWS
+    return _strtod_l(ptr, endptr, c_locale());
+#elif defined(SENTRY_PLATFORM_ANDROID) || defined(SENTRY_PLATFORM_IOS)
+    return strtod(ptr, endptr);
+#else
+    return strtod_l(ptr, endptr, c_locale());
+#endif
+}
+
+int
+sentry__snprintf_c(char *buf, size_t buf_size, const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+
+    int rv;
+#ifdef SENTRY_PLATFORM_WINDOWS
+    rv = _vsnprintf_l(buf, buf_size, fmt, c_locale(), args);
+#elif defined(SENTRY_PLATFORM_ANDROID) || defined(SENTRY_PLATFORM_IOS)
+    rv = vsnprintf(buf, buf_size, fmt, args);
+#elif defined(SENTRY_PLATFORM_MACOS)
+    rv = vsnprintf_l(buf, buf_size, c_locale(), fmt, args);
+#else
+    rv = stbsp_vsnprintf(buf, buf_size, fmt, args);
+#endif
+
+    va_end(args);
+    return rv;
 }

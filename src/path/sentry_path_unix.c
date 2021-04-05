@@ -156,16 +156,11 @@ sentry_path_t *
 sentry__path_from_str(const char *s)
 {
     char *path = sentry__string_clone(s);
-    sentry_path_t *rv = NULL;
     if (!path) {
         return NULL;
     }
-    rv = sentry__path_from_str_owned(path);
-    if (rv) {
-        return rv;
-    }
-    sentry_free(path);
-    return NULL;
+    // NOTE: function will free `path` on error
+    return sentry__path_from_str_owned(path);
 }
 
 sentry_path_t *
@@ -173,6 +168,7 @@ sentry__path_from_str_owned(char *s)
 {
     sentry_path_t *rv = SENTRY_MAKE(sentry_path_t);
     if (!rv) {
+        sentry_free(s);
         return NULL;
     }
     rv->path = s;
@@ -195,8 +191,8 @@ sentry__path_filename_matches(const sentry_path_t *path, const char *filename)
 bool
 sentry__path_ends_with(const sentry_path_t *path, const char *suffix)
 {
-    int pathlen = strlen(path->path);
-    int suffixlen = strlen(suffix);
+    size_t pathlen = strlen(path->path);
+    size_t suffixlen = strlen(suffix);
     if (suffixlen > pathlen) {
         return false;
     }
@@ -226,6 +222,18 @@ sentry__path_get_size(const sentry_path_t *path)
     } else {
         return 0;
     }
+}
+
+sentry_path_t *
+sentry__path_append_str(const sentry_path_t *base, const char *suffix)
+{
+    sentry_stringbuilder_t sb;
+
+    sentry__stringbuilder_init(&sb);
+    sentry__stringbuilder_append(&sb, base->path);
+    sentry__stringbuilder_append(&sb, suffix);
+
+    return sentry__path_from_str_owned(sentry__stringbuilder_into_string(&sb));
 }
 
 sentry_path_t *

@@ -2,35 +2,9 @@
 #define SENTRY_CORE_H_INCLUDED
 
 #include "sentry_boot.h"
-
-#include "sentry_database.h"
-#include "sentry_path.h"
-#include "sentry_utils.h"
+#include "sentry_logger.h"
 
 #define SENTRY_BREADCRUMBS_MAX 100
-
-#ifdef SENTRY_PLATFORM_ANDROID
-#    include <android/log.h>
-#    define SENTRY_FPRINTF(fd, message, ...)                                   \
-        __android_log_print(                                                   \
-            ANDROID_LOG_INFO, "sentry-native", message, __VA_ARGS__)
-#else
-#    define SENTRY_FPRINTF(fd, message, ...)                                   \
-        fprintf(fd, "[sentry] " message, __VA_ARGS__)
-#endif
-#define SENTRY_DEBUGF(message, ...)                                            \
-    do {                                                                       \
-        const sentry_options_t *_options = sentry_get_options();               \
-        if (_options && sentry_options_get_debug(_options)) {                  \
-            SENTRY_FPRINTF(stderr, message "\n", __VA_ARGS__);                 \
-        }                                                                      \
-    } while (0)
-
-#define SENTRY_DEBUG(message) SENTRY_DEBUGF("%s", message "")
-
-// TODO: we might want to have different log levels at some point
-#define SENTRY_TRACEF(message, ...) SENTRY_DEBUGF(message, __VA_ARGS__)
-#define SENTRY_TRACE(message) SENTRY_DEBUG(message)
 
 #if defined(__GNUC__) && (__GNUC__ >= 4)
 #    define MUST_USE __attribute__((warn_unused_result))
@@ -40,61 +14,13 @@
 #    define MUST_USE
 #endif
 
-#ifdef __GNUC__
+#if defined(__GNUC__)
 #    define UNUSED(x) UNUSED_##x __attribute__((__unused__))
+#elif defined(_MSC_VER)
+#    define UNUSED(x) UNUSED_##x __pragma(warning(suppress : 4100))
 #else
 #    define UNUSED(x) UNUSED_##x
 #endif
-
-struct sentry_backend_s;
-
-/**
- * This is a linked list of all the attachments registered via
- * `sentry_options_add_attachment`.
- */
-typedef struct sentry_attachment_s sentry_attachment_t;
-struct sentry_attachment_s {
-    char *name;
-    sentry_path_t *path;
-    sentry_attachment_t *next;
-};
-
-/**
- * This is the main options struct, which is being accessed throughout all of
- * the sentry internals.
- */
-struct sentry_options_s {
-    char *raw_dsn;
-    sentry_dsn_t dsn;
-    double sample_rate;
-    char *release;
-    char *environment;
-    char *dist;
-    char *http_proxy;
-    char *ca_certs;
-    sentry_path_t *database_path;
-    sentry_path_t *handler_path;
-    bool debug;
-    bool require_user_consent;
-    bool system_crash_reporter_enabled;
-
-    sentry_attachment_t *attachments;
-    sentry_run_t *run;
-
-    sentry_transport_t *transport;
-    sentry_event_function_t before_send_func;
-    void *before_send_data;
-
-    /* everything from here on down are options which are stored here but
-       not exposed through the options API */
-    struct sentry_backend_s *backend;
-    sentry_user_consent_t user_consent;
-};
-
-/**
- * This will free a previously allocated attachment.
- */
-void sentry__attachment_free(sentry_attachment_t *attachment);
 
 /**
  * This function will check the user consent, and return `true` if uploads
@@ -103,16 +29,28 @@ void sentry__attachment_free(sentry_attachment_t *attachment);
 bool sentry__should_skip_upload(void);
 
 /**
- * This function is essential to capture reports in the case of a hard crash.
- * It will set a special transport that will dump events to disk.
- * See `sentry__run_write_envelope`.
+ * Convert the given event into an envelope.
+ *
+ * More specifically, it will do the following things:
+ * - sample the event, possibly discarding it,
+ * - apply the scope to it,
+ * - call the before_send hook on it,
+ * - add the event to a new envelope,
+ * - record errors on the current session,
+ * - add any attachments to the envelope as well
+ *
+ * The function will ensure the event has a UUID and write it into the
+ * `event_id` out-parameter.
  */
-void sentry__enforce_disk_transport(void);
+sentry_envelope_t *sentry__prepare_event(const sentry_options_t *options,
+    sentry_value_t event, sentry_uuid_t *event_id);
 
 /**
- * This function will submit the given `envelope` to the configured transport.
+ * This function will submit the `envelope` to the given `transport`, first
+ * checking for consent.
  */
-void sentry__capture_envelope(sentry_envelope_t *envelope);
+void sentry__capture_envelope(
+    sentry_transport_t *transport, sentry_envelope_t *envelope);
 
 /**
  * Generates a new random UUID for events.
@@ -126,5 +64,19 @@ sentry_uuid_t sentry__new_event_id(void);
  */
 sentry_value_t sentry__ensure_event_id(
     sentry_value_t event, sentry_uuid_t *uuid_out);
+
+/**
+ * This will return an owned reference to the global options.
+ */
+const sentry_options_t *sentry__options_getref(void);
+
+/**
+ * Release the lock on the global options.
+ */
+void sentry__options_unlock(void);
+
+#define SENTRY_WITH_OPTIONS(Options)                                           \
+    for (const sentry_options_t *Options = sentry__options_getref(); Options;  \
+         sentry_options_free((sentry_options_t *)Options), Options = NULL)
 
 #endif

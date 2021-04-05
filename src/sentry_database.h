@@ -6,7 +6,7 @@
 #include "sentry_path.h"
 #include "sentry_session.h"
 
-typedef struct {
+typedef struct sentry_run_s {
     sentry_uuid_t uuid;
     sentry_path_t *run_path;
     sentry_path_t *session_path;
@@ -62,8 +62,12 @@ bool sentry__run_clear_session(const sentry_run_t *run);
  * will be locked, and any files named  `<event-uuid>.envelope` or
  * `session.json` will be queued for sending to the  backend. The files and
  * directories matching these criteria will be deleted afterwards.
+ * The following heuristic is applied to all unclosed sessions: If the session
+ * was started before the timestamp given by `last_crash`, the session is closed
+ * as "crashed" with an appropriate duration.
  */
-void sentry__process_old_runs(const sentry_options_t *options);
+void sentry__process_old_runs(
+    const sentry_options_t *options, uint64_t last_crash);
 
 /**
  * This will write the current ISO8601 formatted timestamp into the

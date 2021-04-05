@@ -20,6 +20,8 @@ typedef enum {
  * metadata.
  */
 typedef struct sentry_session_s {
+    char *release;
+    char *environment;
     sentry_uuid_t session_id;
     sentry_value_t distinct_id;
     uint64_t started_ms;
@@ -60,7 +62,8 @@ sentry_session_t *sentry__session_from_path(const sentry_path_t *path);
 /**
  * This will end the current session with an explicit `status` code.
  */
-void sentry__end_current_session_with_status(sentry_session_status_t status);
+sentry_session_t *sentry__end_current_session_with_status(
+    sentry_session_status_t status);
 
 /**
  * This will add `error_count` new errors to the current session.
