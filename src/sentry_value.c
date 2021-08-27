@@ -544,8 +544,13 @@ sentry__value_stringify(sentry_value_t value)
     case SENTRY_VALUE_TYPE_STRING:
         return sentry__string_clone(sentry_value_as_string(value));
     default: {
-        char buf[50];
-        snprintf(buf, sizeof(buf), "%g", sentry_value_as_double(value));
+        char buf[24];
+        size_t written = (size_t)sentry__snprintf_c(
+            buf, sizeof(buf), "%g", sentry_value_as_double(value));
+        if (written >= sizeof(buf)) {
+            return sentry__string_clone("");
+        }
+        buf[written] = '\0';
         return sentry__string_clone(buf);
     }
     }
@@ -606,13 +611,19 @@ sentry__value_append_bounded(sentry_value_t value, sentry_value_t v, size_t max)
     //   move 99 items (len - 1)
     //   from 20
 
-    size_t to_move = max - 1;
+    size_t to_move = max >= 1 ? max - 1 : 0;
     size_t to_shift = l->len - to_move;
     for (size_t i = 0; i < to_shift; i++) {
         sentry_value_decref(l->items[i]);
     }
-    memmove(l->items, l->items + (to_shift), to_move * sizeof(l->items[0]));
-    l->items[max - 1] = v;
+    if (to_move) {
+        memmove(l->items, l->items + to_shift, to_move * sizeof(l->items[0]));
+    }
+    if (max >= 1) {
+        l->items[max - 1] = v;
+    } else {
+        sentry_value_decref(v);
+    }
     l->len = max;
     return 0;
 
@@ -794,8 +805,8 @@ sentry_value_is_null(sentry_value_t value)
     return value._bits == CONST_NULL;
 }
 
-static void
-value_to_json(sentry_jsonwriter_t *jw, sentry_value_t value)
+void
+sentry__jsonwriter_write_value(sentry_jsonwriter_t *jw, sentry_value_t value)
 {
     switch (sentry_value_get_type(value)) {
     case SENTRY_VALUE_TYPE_NULL:
@@ -817,7 +828,7 @@ value_to_json(sentry_jsonwriter_t *jw, sentry_value_t value)
         const list_t *l = value_as_thing(value)->payload._ptr;
         sentry__jsonwriter_write_list_start(jw);
         for (size_t i = 0; i < l->len; i++) {
-            value_to_json(jw, l->items[i]);
+            sentry__jsonwriter_write_value(jw, l->items[i]);
         }
         sentry__jsonwriter_write_list_end(jw);
         break;
@@ -827,7 +838,7 @@ value_to_json(sentry_jsonwriter_t *jw, sentry_value_t value)
         sentry__jsonwriter_write_object_start(jw);
         for (size_t i = 0; i < o->len; i++) {
             sentry__jsonwriter_write_key(jw, o->pairs[i].k);
-            value_to_json(jw, o->pairs[i].v);
+            sentry__jsonwriter_write_value(jw, o->pairs[i].v);
         }
         sentry__jsonwriter_write_object_end(jw);
         break;
@@ -838,8 +849,11 @@ value_to_json(sentry_jsonwriter_t *jw, sentry_value_t value)
 char *
 sentry_value_to_json(sentry_value_t value)
 {
-    sentry_jsonwriter_t *jw = sentry__jsonwriter_new_in_memory();
-    value_to_json(jw, value);
+    sentry_jsonwriter_t *jw = sentry__jsonwriter_new(NULL);
+    if (!jw) {
+        return NULL;
+    }
+    sentry__jsonwriter_write_value(jw, value);
     return sentry__jsonwriter_into_string(jw, NULL);
 }
 
@@ -903,6 +917,9 @@ sentry_value_to_msgpack(sentry_value_t value, size_t *size_out)
 sentry_value_t
 sentry__value_new_string_owned(char *s)
 {
+    if (!s) {
+        return sentry_value_new_null();
+    }
     sentry_value_t rv
         = new_thing_value(s, THING_TYPE_STRING | THING_TYPE_FROZEN);
     if (sentry_value_is_null(rv)) {
@@ -923,22 +940,36 @@ sentry__value_new_string_from_wstr(const wchar_t *s)
 sentry_value_t
 sentry__value_new_addr(uint64_t addr)
 {
-    char buf[100];
-    snprintf(buf, sizeof(buf), "0x%llx", (unsigned long long)addr);
+    char buf[32];
+    size_t written = (size_t)snprintf(
+        buf, sizeof(buf), "0x%llx", (unsigned long long)addr);
+    if (written >= sizeof(buf)) {
+        return sentry_value_new_null();
+    }
+    buf[written] = '\0';
     return sentry_value_new_string(buf);
 }
 
 sentry_value_t
 sentry__value_new_hexstring(const uint8_t *bytes, size_t len)
 {
-    char *buf = sentry_malloc(len * 2 + 1);
+    size_t buf_len = len * 2 + 1;
+    char *buf = sentry_malloc(buf_len);
     if (!buf) {
         return sentry_value_new_null();
     }
-    char *ptr = buf;
+    size_t written = 0;
+
     for (size_t i = 0; i < len; i++) {
-        ptr += snprintf(ptr, 3, "%02hhx", bytes[i]);
+        size_t rv = (size_t)snprintf(
+            buf + written, buf_len - written, "%02hhx", bytes[i]);
+        if (rv >= buf_len - written) {
+            sentry_free(buf);
+            return sentry_value_new_null();
+        }
+        written += rv;
     }
+    buf[written] = '\0';
     return sentry__value_new_string_owned(buf);
 }
 
@@ -950,6 +981,7 @@ sentry__value_new_uuid(const sentry_uuid_t *uuid)
         return sentry_value_new_null();
     }
     sentry_uuid_as_string(uuid, buf);
+    buf[36] = '\0';
     return sentry__value_new_string_owned(buf);
 }
 
@@ -970,6 +1002,8 @@ sentry_value_new_event(void)
     sentry_value_set_by_key(rv, "timestamp",
         sentry__value_new_string_owned(
             sentry__msec_time_to_iso8601(sentry__msec_time())));
+
+    sentry_value_set_by_key(rv, "platform", sentry_value_new_string("native"));
 
     return rv;
 }
@@ -1010,8 +1044,38 @@ sentry_value_new_breadcrumb(const char *type, const char *message)
     return rv;
 }
 
-void
-sentry_event_value_add_stacktrace(sentry_value_t event, void **ips, size_t len)
+sentry_value_t
+sentry_value_new_exception(const char *type, const char *value)
+{
+    sentry_value_t exc = sentry_value_new_object();
+    sentry_value_set_by_key(exc, "type", sentry_value_new_string(type));
+    sentry_value_set_by_key(exc, "value", sentry_value_new_string(value));
+    return exc;
+}
+
+sentry_value_t
+sentry_value_new_thread(uint64_t id, const char *name)
+{
+    sentry_value_t thread = sentry_value_new_object();
+
+    // NOTE: values end up as JSON, which has no support for `u64`.
+    char buf[20 + 1];
+    size_t written
+        = (size_t)snprintf(buf, sizeof(buf), "%llu", (unsigned long long)id);
+    if (written < sizeof(buf)) {
+        buf[written] = '\0';
+        sentry_value_set_by_key(thread, "id", sentry_value_new_string(buf));
+    }
+
+    if (name) {
+        sentry_value_set_by_key(thread, "name", sentry_value_new_string(name));
+    }
+
+    return thread;
+}
+
+sentry_value_t
+sentry_value_new_stacktrace(void **ips, size_t len)
 {
     void *walked_backtrace[256];
 
@@ -1032,14 +1096,56 @@ sentry_event_value_add_stacktrace(sentry_value_t event, void **ips, size_t len)
     sentry_value_t stacktrace = sentry_value_new_object();
     sentry_value_set_by_key(stacktrace, "frames", frames);
 
+    return stacktrace;
+}
+
+static sentry_value_t
+sentry__get_or_insert_values_list(sentry_value_t parent, const char *key)
+{
+    sentry_value_t obj = sentry_value_get_by_key(parent, key);
+    if (sentry_value_is_null(obj)) {
+        obj = sentry_value_new_object();
+        sentry_value_set_by_key(parent, key, obj);
+    }
+
+    sentry_value_type_t type = sentry_value_get_type(obj);
+    sentry_value_t values = sentry_value_new_null();
+    if (type == SENTRY_VALUE_TYPE_OBJECT) {
+        values = sentry_value_get_by_key(obj, "values");
+        if (sentry_value_is_null(values)) {
+            values = sentry_value_new_list();
+            sentry_value_set_by_key(obj, "values", values);
+        }
+    } else if (type == SENTRY_VALUE_TYPE_LIST) {
+        values = obj;
+    }
+
+    return values;
+}
+
+void
+sentry_event_add_exception(sentry_value_t event, sentry_value_t exception)
+{
+    sentry_value_t exceptions
+        = sentry__get_or_insert_values_list(event, "exception");
+    sentry_value_append(exceptions, exception);
+}
+
+void
+sentry_event_add_thread(sentry_value_t event, sentry_value_t thread)
+{
+    sentry_value_t threads
+        = sentry__get_or_insert_values_list(event, "threads");
+    sentry_value_append(threads, thread);
+}
+
+void
+sentry_event_value_add_stacktrace(sentry_value_t event, void **ips, size_t len)
+{
+    sentry_value_t stacktrace = sentry_value_new_stacktrace(ips, len);
+
     sentry_value_t thread = sentry_value_new_object();
     sentry_value_set_by_key(thread, "stacktrace", stacktrace);
 
-    sentry_value_t values = sentry_value_new_list();
-    sentry_value_append(values, thread);
-
-    sentry_value_t threads = sentry_value_new_object();
-    sentry_value_set_by_key(threads, "values", values);
-
-    sentry_value_set_by_key(event, "threads", threads);
+    sentry_event_add_thread(event, thread);
 }
