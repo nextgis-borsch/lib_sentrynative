@@ -159,10 +159,10 @@ endfunction()
 # ===== sentry library =====
 
 if(BUILD_SHARED_LIBS OR OSX_FRAMEWORK)
-	add_library(${LIB_NAME} SHARED "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+	add_library(${LIB_NAME} SHARED ${PROJECT_SOURCE_DIR}/vendor/mpack.c ${PROJECT_SOURCE_DIR}/vendor/stb_sprintf.c)
     target_compile_definitions(${LIB_NAME} PRIVATE SENTRY_BUILD_SHARED)
 else()
-	add_library(${LIB_NAME} STATIC "${PROJECT_SOURCE_DIR}/vendor/mpack.c")
+	add_library(${LIB_NAME} STATIC ${PROJECT_SOURCE_DIR}/vendor/mpack.c ${PROJECT_SOURCE_DIR}/vendor/stb_sprintf.c)
     target_compile_definitions(${LIB_NAME} PUBLIC SENTRY_BUILD_STATIC)
 endif()
 add_library(sentry::sentry ALIAS ${LIB_NAME})
