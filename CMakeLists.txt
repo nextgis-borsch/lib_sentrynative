@@ -67,6 +67,15 @@ endif()
 #                        subdirectory in another project or whether we access it from one of our subdirectories.
 set(SENTRY_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+set(SENTRY_CPACK_PACKAGE_PREFIX "sentry-native" CACHE STRING "Prefix for CPack ZIP and version.str artifact names")
+include(util)
+check_version(SENTRY_NG_PKG_MAJOR SENTRY_NG_PKG_MINOR SENTRY_NG_PKG_PATCH)
+set(SENTRY_NG_PKG_VERSION "${SENTRY_NG_PKG_MAJOR}.${SENTRY_NG_PKG_MINOR}.${SENTRY_NG_PKG_PATCH}")
+report_version("sentry-native" "${SENTRY_NG_PKG_VERSION}")
+
+
 if(NOT CMAKE_C_STANDARD)
 	set(CMAKE_C_STANDARD 99)
 endif()
@@ -105,8 +114,8 @@ option(SENTRY_PIC "Build sentry (and dependent) libraries as position independen
 
 option(SENTRY_TRANSPORT_COMPRESSION "Enable transport gzip compression" OFF)
 
-option(SENTRY_BUILD_TESTS "Build sentry-native tests" "${SENTRY_MAIN_PROJECT}")
-option(SENTRY_BUILD_EXAMPLES "Build sentry-native example(s)" "${SENTRY_MAIN_PROJECT}")
+option(SENTRY_BUILD_TESTS "Build sentry-native tests" OFF)
+option(SENTRY_BUILD_EXAMPLES "Build sentry-native example(s)" OFF)
 option(SENTRY_BUILD_BENCHMARKS "Build sentry-native benchmarks" OFF)
 
 # Platform version embedding options
@@ -457,15 +466,19 @@ if(SENTRY_TRANSPORT_CURL)
 endif()
 
 if(SENTRY_TRANSPORT_COMPRESSION)
-	if(NOT TARGET ZLIB::ZLIB)
-		find_package(ZLIB REQUIRED)
+	include(FindAnyProject)
+	find_anyproject(ZLIB REQUIRED)
+	if(ZLIB_INCLUDE_DIR)
+		target_include_directories(sentry PRIVATE ${ZLIB_INCLUDE_DIR})
+	elseif(ZLIB_INCLUDE_DIRS)
+		target_include_directories(sentry PRIVATE ${ZLIB_INCLUDE_DIRS})
 	endif()
+	target_link_libraries(sentry PRIVATE ${ZLIB_LIBRARIES})
 
 	if(SENTRY_BACKEND_CRASHPAD)
 		set(CRASHPAD_ZLIB_SYSTEM ON CACHE BOOL "Force CRASHPAD_ZLIB_SYSTEM when enabling transport compression" FORCE)
 	endif()
 
-	target_link_libraries(sentry PRIVATE ZLIB::ZLIB)
 	target_compile_definitions(sentry PRIVATE SENTRY_TRANSPORT_COMPRESSION)
 endif()
 
@@ -812,7 +825,12 @@ elseif(SENTRY_BACKEND_NATIVE)
 
 	# Compression library
 	if(SENTRY_TRANSPORT_COMPRESSION)
-		target_link_libraries(sentry-crash PRIVATE ZLIB::ZLIB)
+		if(ZLIB_INCLUDE_DIR)
+			target_include_directories(sentry-crash PRIVATE ${ZLIB_INCLUDE_DIR})
+		elseif(ZLIB_INCLUDE_DIRS)
+			target_include_directories(sentry-crash PRIVATE ${ZLIB_INCLUDE_DIRS})
+		endif()
+		target_link_libraries(sentry-crash PRIVATE ${ZLIB_LIBRARIES})
 	endif()
 
 	# Unwinder libraries (must match sentry target)
@@ -962,3 +980,33 @@ if(SENTRY_BUILD_SHARED_LIBS)
 	    "$<$<PLATFORM_ID:Android>:-Wl,-z,max-page-size=16384>"
 	)
 endif()
+
+if(SENTRY_ENABLE_INSTALL)
+	configure_file(
+		"${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
+		"${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
+		@ONLY)
+	add_custom_target(uninstall
+		COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
+endif()
+
+if(NOT DEFINED PACKAGE_VENDOR)
+	set(PACKAGE_VENDOR NextGIS)
+endif()
+if(SENTRY_BUILD_SHARED_LIBS)
+	set(BUILD_STATIC_LIBS OFF)
+else()
+	set(BUILD_STATIC_LIBS ON)
+endif()
+set(CPACK_PACKAGE_NAME "${SENTRY_CPACK_PACKAGE_PREFIX}")
+set(CPACK_PACKAGE_VENDOR "${PACKAGE_VENDOR}")
+set(CPACK_PACKAGE_VERSION "${SENTRY_VERSION_BASE}")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${CPACK_PACKAGE_NAME} installation")
+set(CPACK_PACKAGE_RELOCATABLE TRUE)
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
+set(CPACK_GENERATOR "ZIP")
+set(CPACK_MONOLITHIC_INSTALL ON)
+set(CPACK_STRIP_FILES TRUE)
+get_cpack_filename(${SENTRY_VERSION_BASE} PROJECT_CPACK_FILENAME)
+set(CPACK_PACKAGE_FILE_NAME ${PROJECT_CPACK_FILENAME})
+include(CPack)
