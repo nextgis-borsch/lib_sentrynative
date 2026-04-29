@@ -67,13 +67,19 @@ endif()
 #                        subdirectory in another project or whether we access it from one of our subdirectories.
 set(SENTRY_SOURCE_DIR ${PROJECT_SOURCE_DIR})
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH
+	"${SENTRY_SOURCE_DIR}/external/borsch/cmake"
+	"${SENTRY_SOURCE_DIR}/external/borsch/cmake/modules")
 
 set(SENTRY_CPACK_PACKAGE_PREFIX "sentry-native" CACHE STRING "Prefix for CPack ZIP and version.str artifact names")
-include(util)
-check_version(SENTRY_NG_PKG_MAJOR SENTRY_NG_PKG_MINOR SENTRY_NG_PKG_PATCH)
-set(SENTRY_NG_PKG_VERSION "${SENTRY_NG_PKG_MAJOR}.${SENTRY_NG_PKG_MINOR}.${SENTRY_NG_PKG_PATCH}")
+include(helper)
+include(version)
+set(SENTRY_NG_PKG_VERSION "${SENTRY_VERSION_BASE}")
 report_version("sentry-native" "${SENTRY_NG_PKG_VERSION}")
+write_version("${CMAKE_CURRENT_SOURCE_DIR}/include/sentry.h"
+	"${SENTRY_VERSION_MAJOR}"
+	"${SENTRY_VERSION_MINOR}"
+	"${SENTRY_VERSION_PATCH}")
 
 
 if(NOT CMAKE_C_STANDARD)
@@ -994,8 +1000,6 @@ if(SENTRY_ENABLE_INSTALL)
 		"${CMAKE_CURRENT_SOURCE_DIR}/cmake/cmake_uninstall.cmake.in"
 		"${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake"
 		@ONLY)
-	add_custom_target(uninstall
-		COMMAND ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
 endif()
 
 if(NOT DEFINED PACKAGE_VENDOR)
@@ -1006,15 +1010,12 @@ if(SENTRY_BUILD_SHARED_LIBS)
 else()
 	set(BUILD_STATIC_LIBS ON)
 endif()
-set(CPACK_PACKAGE_NAME "${SENTRY_CPACK_PACKAGE_PREFIX}")
-set(CPACK_PACKAGE_VENDOR "${PACKAGE_VENDOR}")
-set(CPACK_PACKAGE_VERSION "${SENTRY_VERSION_BASE}")
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "${CPACK_PACKAGE_NAME} installation")
-set(CPACK_PACKAGE_RELOCATABLE TRUE)
-set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
-set(CPACK_GENERATOR "ZIP")
-set(CPACK_MONOLITHIC_INSTALL ON)
-set(CPACK_STRIP_FILES TRUE)
-get_cpack_filename(${SENTRY_VERSION_BASE} PROJECT_CPACK_FILENAME)
-set(CPACK_PACKAGE_FILE_NAME ${PROJECT_CPACK_FILENAME})
-include(CPack)
+include(packaging)
+create_borsch_package(${SENTRY_CPACK_PACKAGE_PREFIX}
+	VENDOR ${PACKAGE_VENDOR}
+	VERSION ${SENTRY_VERSION_BASE}
+	TARGETS ${TARGETS}
+	COMPATIBILITY AnyNewerVersion
+	HEADERS include/sentry.h
+	HEADERS_DIRS include/sentry
+)
