@@ -85,7 +85,15 @@ if(NOT CMAKE_CXX_STANDARD)
 endif()
 
 include(GNUInstallDirs)
-set(CMAKE_INSTALL_CMAKEDIR "${CMAKE_INSTALL_LIBDIR}/cmake/sentry")
+set(PACKAGE_NAME sentrynative)
+string(TOUPPER ${PACKAGE_NAME} PACKAGE_UPPER_NAME)
+set(TARGETS sentry)
+
+set(INSTALL_BIN_DIR ${CMAKE_INSTALL_BINDIR} CACHE INTERNAL "Installation directory for executables" FORCE)
+set(INSTALL_LIB_DIR ${CMAKE_INSTALL_LIBDIR} CACHE INTERNAL "Installation directory for libraries" FORCE)
+set(INSTALL_INC_DIR ${CMAKE_INSTALL_INCLUDEDIR} CACHE INTERNAL "Installation directory for headers" FORCE)
+set(INSTALL_CMAKECONF_DIR ${CMAKE_INSTALL_DATADIR}/${PACKAGE_NAME}/CMake CACHE INTERNAL "Installation directory for cmake config files" FORCE)
+set(CMAKE_INSTALL_CMAKEDIR "${INSTALL_CMAKECONF_DIR}")
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	set(LINUX TRUE)
@@ -872,53 +880,34 @@ if(SENTRY_INTEGRATION_QT)
 	target_link_libraries(sentry PRIVATE Qt${Qt_VERSION_MAJOR}::Core)
 endif()
 
-include(CMakePackageConfigHelpers)
-configure_package_config_file(sentry-config.cmake.in sentry-config.cmake
-	INSTALL_DESTINATION "${CMAKE_INSTALL_CMAKEDIR}")
+export(TARGETS ${TARGETS}
+	FILE ${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Targets.cmake)
 
-# generate package version file
-# We would have liked to use `SameMinorVersion`, but that is only supported on
-# CMake >= 3.11.
-write_basic_package_version_file(sentry-config-version.cmake
-	VERSION ${SENTRY_VERSION_BASE}
-	COMPATIBILITY SameMajorVersion)
+option(REGISTER_PACKAGE "Register build tree in the CMake package registry" OFF)
+if(REGISTER_PACKAGE)
+	export(PACKAGE ${PACKAGE_UPPER_NAME})
+endif()
 
-sentry_install(TARGETS sentry EXPORT sentry
-	ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-	LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
-	RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
-	PUBLIC_HEADER DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+configure_file(cmake/PackageConfig.cmake.in
+	${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake @ONLY)
+
+sentry_install(TARGETS ${TARGETS}
+	EXPORT ${PACKAGE_UPPER_NAME}Targets
+	ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
+	LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
+	RUNTIME DESTINATION "${INSTALL_BIN_DIR}"
+	PUBLIC_HEADER DESTINATION "${INSTALL_INC_DIR}"
+	INCLUDES DESTINATION "${INSTALL_INC_DIR}"
 )
-sentry_install(EXPORT sentry NAMESPACE sentry:: FILE sentry-targets.cmake
-	DESTINATION "${CMAKE_INSTALL_CMAKEDIR}")
-sentry_install(
-	FILES
-		"${PROJECT_BINARY_DIR}/sentry-config.cmake"
-		"${PROJECT_BINARY_DIR}/sentry-config-version.cmake"
-	DESTINATION "${CMAKE_INSTALL_CMAKEDIR}")
+sentry_install(FILES
+	${PROJECT_BINARY_DIR}/${PACKAGE_UPPER_NAME}Config.cmake
+	DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
+sentry_install(EXPORT ${PACKAGE_UPPER_NAME}Targets
+	DESTINATION ${INSTALL_CMAKECONF_DIR} COMPONENT dev)
 if(WIN32 AND MSVC AND SENTRY_BUILD_SHARED_LIBS)
 	sentry_install(FILES $<TARGET_PDB_FILE:sentry>
 		DESTINATION "${CMAKE_INSTALL_BINDIR}" OPTIONAL)
 endif()
-
-configure_file(
-	"${CMAKE_CURRENT_SOURCE_DIR}/cmake/SENTYNATIVEConfig.cmake.in"
-	"${CMAKE_CURRENT_BINARY_DIR}/SENTYNATIVEConfig.cmake"
-	@ONLY)
-export(TARGETS sentry
-	FILE "${CMAKE_CURRENT_BINARY_DIR}/SENTYNATIVETargets.cmake"
-	NAMESPACE "")
-
-export(PACKAGE SENTYNATIVE)
-
-sentry_install(TARGETS sentry 
-        EXPORT ${PACKAGE_UPPER_NAME}Targets
-        RUNTIME DESTINATION ${INSTALL_BIN_DIR}
-        ARCHIVE DESTINATION ${INSTALL_LIB_DIR}
-        LIBRARY DESTINATION ${INSTALL_LIB_DIR}
-        INCLUDES DESTINATION ${INSTALL_INC_DIR}
-        FRAMEWORK DESTINATION ${INSTALL_LIB_DIR}
-    )
 
 # ===== tests =====
 
